@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # --- CONFIG ---
-BOT_TOKEN = "8072081226:AAGwHnJo7rn-FR33iaqsYN8yE5ftFKzNAdA"
+BOT_TOKEN = "7721980677:AAHnF4Sra3VB6YIKCat_1AzK8DJumasawF8"
 CHANNEL_USERNAME = "@channellinksx"
 ADMIN_IDS = [8073033955]  # Replace with your actual admin user IDs
 
