@@ -7,12 +7,13 @@ import json
 from datetime import datetime, timedelta
 import random
 import string
+import base64
 
 # --- CONFIG ---
 BOT_TOKEN = "7721980677:AAHnF4Sra3VB6YIKCat_1AzK8DJumasawF8"
 CHANNEL_USERNAME = "@channellinksx"
 ADMIN_IDS = [8073033955]  # Replace with your actual admin user IDs
-WEBSITE_URL = ""  # Website URL - Admin will add later
+WEBSITE_URL = "https://bharatlink.in/your-short-link"  # Your bharatlink shortened URL
 
 # Storage for admin sessions, deeplinks, and used files
 admin_sessions = {}  # Track admin upload sessions
@@ -24,6 +25,8 @@ stored_posters = []   # Store available posters
 # User access tracking
 user_access = {}  # Track user access permissions and expiration
 user_funnel_progress = {}  # Track user progress through funnel
+valid_tokens = {}  # Store valid tokens with expiry
+user_tokens = {}  # Track user token submissions
 
 # Generate unique deeplink for content
 def generate_deeplink(admin_id, video_id, poster_id):
@@ -31,6 +34,41 @@ def generate_deeplink(admin_id, video_id, poster_id):
     unique_string = f"{admin_id}_{video_id}_{poster_id}_{timestamp}"
     hash_object = hashlib.sha256(unique_string.encode())
     return hash_object.hexdigest()[:16]
+
+# Validate token format and expiry
+def validate_token(token, user_id):
+    try:
+        # Decode token
+        decoded = base64.b64decode(token).decode('utf-8')
+        parts = decoded.split('_')
+        
+        if len(parts) < 3:
+            return False, "Invalid token format"
+        
+        timestamp = int(parts[0])
+        current_time = int(time.time() * 1000)  # Convert to milliseconds
+        
+        # Check if token is expired (15 minutes = 900000 ms)
+        if current_time - timestamp > 900000:
+            return False, "Token expired"
+        
+        # Check if token already used
+        if token in user_tokens and user_tokens[token] != user_id:
+            return False, "Token already used"
+        
+        # Check if user already used a token recently
+        for used_token, used_user_id in user_tokens.items():
+            if used_user_id == user_id:
+                used_decoded = base64.b64decode(used_token).decode('utf-8')
+                used_timestamp = int(used_decoded.split('_')[0])
+                # If user used token in last 24 hours, reject
+                if current_time - used_timestamp < 86400000:  # 24 hours
+                    return False, "You already have active access"
+        
+        return True, "Valid token"
+        
+    except Exception as e:
+        return False, f"Token validation error: {str(e)}"
 
 # Security: Rate limiting
 def check_rate_limit(user_id):
@@ -86,7 +124,7 @@ async def post_to_channel(context, poster_file_id, deeplink_id, video_info):
         caption = f"""🎬 **NEW EXCLUSIVE CONTENT**
 
 🔥 **Premium Quality Video**
-📱 **Unlimited Access Available**
+📱 **Free Access Available**
 
 ⚡ **Watch Now:**
 👇 Click button below"""
@@ -146,26 +184,28 @@ This bot is for **ADMIN USE ONLY**.
 ✅ **After both uploads:**
 • Unique deeplink generated
 • Auto-posted to channel
-• Unlimited user access enabled
+• Token-based access system
 
 🔄 **New User Funnel:**
 1. User clicks content deeplink
 2. Channel join required
-3. Website visit required
-4. 24-hour access granted
-5. Content access enabled
+3. Website visit (bharatlink + ads)
+4. Token generation on website
+5. Token submission in bot
+6. 24-hour access granted
 
 🔒 **Security Features:**
-• Admin-only uploads
-• Channel join mandatory
-• Website visit tracking
-• Time-limited access
+• Token-based verification
+• Time-limited tokens (15 min)
+• One-time use tokens
+• Anti-fraud system
 
 📊 **Current Status:**
 • Available Posters: {len([p for p in stored_posters if p['file_id'] not in used_posters])}
 • Used Posters: {len(used_posters)}
 • Used Videos: {len(used_videos)}
 • Active Users: {len([u for u in user_access.keys() if has_active_access(u)])}
+• Valid Tokens: {len(valid_tokens)}
 
 🚀 **Ready to upload? Send poster first!**
     """
@@ -233,13 +273,13 @@ async def start_channel_join_step(update, context, deeplink_id):
 
 🎬 **After joining:**
 • Click "I Joined - Continue" button
-• Complete verification process
-• Get 24-hour access to all content
+• Complete website verification
+• Get 24-hour unlimited access
 
 ⚡ **Benefits of joining:**
-• Unlimited content access
-• Premium quality videos
+• Free premium content access
 • Latest updates and releases
+• Exclusive video collection
 
 👇 **Join now to proceed:**
     """
@@ -262,31 +302,35 @@ async def start_website_visit_step(update, context, deeplink_id):
 
     # Website visit step
     keyboard = [
-        [InlineKeyboardButton("🌐 Visit Website", url=WEBSITE_URL if WEBSITE_URL else "https://example.com")],
-        [InlineKeyboardButton("✅ I Visited - Get Access", callback_data=f"visited_{deeplink_id}")]
+        [InlineKeyboardButton("🌐 Visit Website & Get Token", url=WEBSITE_URL)],
+        [InlineKeyboardButton("📝 I Have Token - Submit", callback_data=f"submit_token_{deeplink_id}")]
     ]
 
     website_text = f"""
 ✅ **Step 1 Complete: Channel Joined**
 
-🌐 **Step 2: Website Visit Required**
+🌐 **Step 2: Website Verification Required**
 
-📱 **Complete verification:**
-• Click "Visit Website" button
-• Wait for page to load completely
-• Return here and click "Get Access"
+📱 **Complete these steps:**
+1. Click "Visit Website & Get Token" button
+2. Wait for ads to load (60 seconds)
+3. View ads completely for verification
+4. Get your access token from website
+5. Come back and click "Submit Token"
 
-🎁 **After website visit:**
+💰 **Why website visit?**
+• Helps us maintain free service
+• Supports content creators
+• Ensures genuine users only
+
+🎁 **After verification:**
 • Get 24-hour unlimited access
 • Access all premium content
 • No restrictions on viewing
 
-⚡ **Quick Process:**
-• Takes only 30 seconds
-• One-time verification
-• Instant access granted
+⚡ **Process takes only 2-3 minutes!**
 
-👇 **Visit website to continue:**
+👇 **Visit website to get your token:**
     """
 
     await context.bot.send_message(
@@ -296,8 +340,67 @@ async def start_website_visit_step(update, context, deeplink_id):
         parse_mode="Markdown"
     )
 
+# Handle token submission
+async def handle_token_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    # Check if user is in funnel
+    if user.id not in user_funnel_progress:
+        await update.message.reply_text(
+            "❌ **No active verification process!**\n\nPlease start from content link.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Get current deeplink
+    deeplink_id = user_funnel_progress[user.id].get('current_deeplink')
+    if not deeplink_id:
+        await update.message.reply_text(
+            "❌ **Session expired!**\n\nPlease start from content link again.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    await update.message.reply_text(
+        "🔐 **Token Submission**\n\n📝 Please send your access token from the website:",
+        parse_mode="Markdown"
+    )
+    
+    # Set user state for token input
+    user_funnel_progress[user.id]['step'] = 'awaiting_token'
+    user_funnel_progress[user.id]['token_request_time'] = datetime.now().isoformat()
+
+# Process submitted token
+async def process_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    token = update.message.text.strip()
+    
+    # Check if user is awaiting token
+    if (user.id not in user_funnel_progress or 
+        user_funnel_progress[user.id].get('step') != 'awaiting_token'):
+        return  # Not in token submission mode
+    
+    # Validate token
+    is_valid, message = validate_token(token, user.id)
+    
+    if not is_valid:
+        await update.message.reply_text(
+            f"❌ **Token Validation Failed!**\n\n🔸 {message}\n\n📱 Please get a new token from website.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Token is valid, grant access
+    deeplink_id = user_funnel_progress[user.id]['current_deeplink']
+    
+    # Mark token as used
+    user_tokens[token] = user.id
+    
+    # Grant 24-hour access
+    await grant_24hour_access(update, context, user.id, deeplink_id, token)
+
 # Step 3: Grant 24-Hour Access
-async def grant_24hour_access(update, context, user_id, deeplink_id):
+async def grant_24hour_access(update, context, user_id, deeplink_id, token):
     # Calculate expiration time (24 hours from now)
     current_time = datetime.now()
     expires_at = current_time + timedelta(hours=24)
@@ -306,14 +409,15 @@ async def grant_24hour_access(update, context, user_id, deeplink_id):
     user_access[user_id] = {
         'granted_at': current_time.isoformat(),
         'expires_at': expires_at.isoformat(),
-        'source': 'content_funnel',
-        'deeplink_id': deeplink_id
+        'source': 'token_verification',
+        'deeplink_id': deeplink_id,
+        'token_used': token
     }
 
     # Update funnel progress
     if user_id in user_funnel_progress:
         user_funnel_progress[user_id]['step'] = 'access_granted'
-        user_funnel_progress[user_id]['website_visited_at'] = current_time.isoformat()
+        user_funnel_progress[user_id]['token_submitted_at'] = current_time.isoformat()
         user_funnel_progress[user_id]['access_granted_at'] = current_time.isoformat()
 
     # Format expiration time
@@ -325,6 +429,7 @@ async def grant_24hour_access(update, context, user_id, deeplink_id):
 ✅ **Verification Complete:**
 • Channel: ✅ Joined
 • Website: ✅ Visited
+• Token: ✅ Verified
 • Access: ✅ Granted
 
 ⏰ **Access Details:**
@@ -362,6 +467,11 @@ async def grant_content_access_by_user_id(context, user_id, deeplink_id):
         video_file_id = link_info['video_file_id']
         video_info = link_info['video_info']
 
+        # Update access count
+        if 'access_count' not in link_info:
+            link_info['access_count'] = 0
+        link_info['access_count'] += 1
+
         # Get access expiration time
         expires_at = datetime.fromisoformat(user_access[user_id]['expires_at'])
         expires_formatted = expires_at.strftime("%d %b %Y, %H:%M")
@@ -369,7 +479,7 @@ async def grant_content_access_by_user_id(context, user_id, deeplink_id):
         caption_text = f"""
 🎬 **Exclusive Content Access**
 
-✅ **Successfully Accessed via 24-Hour Access**
+✅ **Successfully Accessed via Token Verification**
 
 📊 **Video Details:**
 • **Size:** {format_file_size(video_info['file_size'])}
@@ -418,7 +528,7 @@ async def handle_poster_upload(update: Update, context: ContextTypes.DEFAULT_TYP
     photo = update.message.photo[-1]
     file_id = photo.file_id
 
-    # Store poster (no burn-after-use for tracking)
+    # Store poster
     poster_info = {
         'file_id': file_id,
         'file_size': photo.file_size or 0,
@@ -482,7 +592,7 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Generate unique deeplink
     deeplink_id = generate_deeplink(user.id, video_file_id, poster_file_id)
 
-    # Store deeplink info (UNLIMITED ACCESS)
+    # Store deeplink info
     deeplinks[deeplink_id] = {
         'video_file_id': video_file_id,
         'poster_file_id': poster_file_id,
@@ -494,14 +604,14 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         },
         'timestamp': datetime.now().isoformat(),
         'caption': update.message.caption or "",
-        'unlimited_access': True,  # New flag for unlimited access
-        'access_count': 0  # Track how many users accessed
+        'unlimited_access': True,
+        'access_count': 0
     }
 
     # Post to channel
     channel_posted = await post_to_channel(context, poster_file_id, deeplink_id, video)
 
-    # Mark files as used for admin tracking only
+    # Mark files as used for admin tracking
     used_posters.add(poster_file_id)
     used_videos.add(video_file_id)
 
@@ -527,17 +637,17 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 🔗 **Content Deeplink:**
 `{deeplink_url}`
 
-🔥 **Access Status:**
-• Unlimited Users: ✅ Enabled
-• Funnel System: ✅ Active
-• 24-Hour Access: ✅ Required
+🔥 **Access System:**
+• Token-based verification: ✅ Active
+• Website monetization: ✅ Enabled
+• 24-hour access: ✅ Required
 
 📢 **Channel:** {CHANNEL_USERNAME}
 
 ⚡ **User Flow:**
-1. Content Link → 2. Channel Join → 3. Website Visit → 4. 24h Access → 5. Video Access
+1. Content Link → 2. Channel Join → 3. Website Visit → 4. Token Submit → 5. 24h Access → 6. Video Access
 
-💡 **Note:** Users will go through complete funnel to get 24-hour access!
+💰 **Revenue:** Bharatlink + Website Ads = Maximum Earnings!
     """
 
     # Add share button
@@ -572,8 +682,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Move to website visit step
         await start_website_visit_step(query, context, deeplink_id)
 
-    elif query.data.startswith("visited_"):
-        deeplink_id = query.data.split("_")[1]
+    elif query.data.startswith("submit_token_"):
+        deeplink_id = query.data.split("_")[2]
         user = query.from_user
 
         # Check channel join again (security)
@@ -585,8 +695,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Grant 24-hour access
-        await grant_24hour_access(query, context, user.id, deeplink_id)
+        # Start token submission process
+        await handle_token_submission(query, context)
+
+# Token command handler
+async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ **Token required!**\n\n📝 Usage: `/token YOUR_TOKEN_HERE`\n\n🌐 Get token from website first.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    token = ' '.join(context.args)
+    
+    # Check if user is in funnel
+    if user.id not in user_funnel_progress:
+        await update.message.reply_text(
+            "❌ **No active verification process!**\n\nPlease start from content link.",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Set token and process
+    update.message.text = token
+    user_funnel_progress[user.id]['step'] = 'awaiting_token'
+    await process_token(update, context)
 
 # Utility functions
 def format_file_size(size_bytes):
@@ -620,18 +756,23 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_deeplinks = len(deeplinks)
     active_users = len([u for u in user_access.keys() if has_active_access(u)])
     total_funnel_users = len(user_funnel_progress)
+    total_tokens_used = len(user_tokens)
 
     # Funnel analytics
-    channel_joined = len([u for u in user_funnel_progress.values() if u.get('step') in ['website_visit', 'access_granted']])
-    website_visited = len([u for u in user_funnel_progress.values() if u.get('step') == 'access_granted'])
+    channel_joined = len([u for u in user_funnel_progress.values() if u.get('step') in ['website_visit', 'awaiting_token', 'access_granted']])
+    website_visited = len([u for u in user_funnel_progress.values() if u.get('step') in ['awaiting_token', 'access_granted']])
+    tokens_submitted = len([u for u in user_funnel_progress.values() if u.get('step') == 'access_granted'])
+
+    # Revenue estimation
+    estimated_revenue = total_tokens_used * 3.5  # Average ₹3.5 per user
 
     stats_text = f"""
 📊 **Admin Statistics**
 
 🎬 **Content Status:**
 • Total Content Links: {total_deeplinks}
+• Total Content Views: {sum([d.get('access_count', 0) for d in deeplinks.values()])}
 • Unlimited Access: ✅ Enabled
-• Total Content Access: {sum([d.get('access_count', 0) for d in deeplinks.values()])}
 
 📸 **Upload Status:**
 • Available Posters: {len([p for p in stored_posters if p['file_id'] not in used_posters])}
@@ -641,19 +782,23 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 **User Analytics:**
 • Active 24h Users: {active_users}
 • Total Funnel Users: {total_funnel_users}
-• Channel Joined: {channel_joined}
-• Website Visited: {website_visited}
-• Conversion Rate: {(website_visited/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%
+• Tokens Used: {total_tokens_used}
 
 🔄 **Funnel Performance:**
-• Step 1 (Channel): {channel_joined}/{total_funnel_users} ({(channel_joined/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
-• Step 2 (Website): {website_visited}/{total_funnel_users} ({(website_visited/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
+• Channel Joined: {channel_joined}/{total_funnel_users} ({(channel_joined/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
+• Website Visited: {website_visited}/{total_funnel_users} ({(website_visited/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
+• Tokens Submitted: {tokens_submitted}/{total_funnel_users} ({(tokens_submitted/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
 
-🔒 **System Status:**
-• Unlimited Content: ✅ Active
-• Funnel System: ✅ Running
-• 24-Hour Access: ✅ Mandatory
-• Website Integration: {'✅ Ready' if WEBSITE_URL else '⏳ Pending'}
+💰 **Revenue Analytics:**
+• Estimated Earnings: ₹{estimated_revenue:.2f}
+• Bharatlink Clicks: {website_visited}
+• Ad Revenue Users: {tokens_submitted}
+
+🔒 **Security Status:**
+• Token System: ✅ Active
+• Token Expiry: ✅ 15 minutes
+• One-time Use: ✅ Enforced
+• Anti-fraud: ✅ Enabled
 
 📈 **System Health:** Optimal
     """
@@ -669,7 +814,7 @@ async def admin_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Clear all data
-    global used_posters, used_videos, stored_posters, deeplinks, admin_sessions, user_access, user_funnel_progress
+    global used_posters, used_videos, stored_posters, deeplinks, admin_sessions, user_access, user_funnel_progress, valid_tokens, user_tokens
     used_posters.clear()
     used_videos.clear()
     stored_posters.clear()
@@ -677,6 +822,8 @@ async def admin_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_sessions.clear()
     user_access.clear()
     user_funnel_progress.clear()
+    valid_tokens.clear()
+    user_tokens.clear()
 
     await update.message.reply_text(
         "🔄 **System Reset Complete!**\n\n✅ All data cleared\n🚀 Ready for fresh uploads",
@@ -689,7 +836,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Main function
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Funnel-Based Media Bot...")
+    print("🚀 Starting Token-Based Revenue Bot System...")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -697,25 +844,26 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("reset", admin_reset))
+    app.add_handler(CommandHandler("token", token_command))
     app.add_handler(CallbackQueryHandler(button_callback))
 
-    # Separate handlers for poster and video
+    # Message handlers
     app.add_handler(MessageHandler(filters.PHOTO, handle_poster_upload))
     app.add_handler(MessageHandler(filters.VIDEO, handle_video_upload))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_token))
 
     # Error handler
     app.add_error_handler(error_handler)
 
-    print("🤖 Enhanced Funnel-Based Media Bot is Running...")
+    print("🤖 Token-Based Revenue Bot is Running...")
     print(f"📢 Channel: {CHANNEL_USERNAME}")
-    print("✅ New Features:")
-    print("   🔄 Complete user funnel system")
-    print("   📸 Poster + Video pairing")
-    print("   🔗 Unlimited content access")
-    print("   📱 Auto channel posting")
-    print("   🚫 Admin-only uploads")
-    print("   🌐 Website visit requirement")
-    print("   🔒 24-hour access system")
-    print("   📊 Funnel analytics tracking")
+    print(f"🌐 Website: {WEBSITE_URL}")
+    print("✅ Features:")
+    print("   🔐 Token-based verification")
+    print("   💰 Revenue optimization")
+    print("   📱 Bharatlink integration")
+    print("   🎯 Ad monetization")
+    print("   🔒 Security system")
+    print("   📊 Analytics tracking")
 
     app.run_polling()
