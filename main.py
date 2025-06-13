@@ -12,19 +12,18 @@ import string
 BOT_TOKEN = "7721980677:AAHnF4Sra3VB6YIKCat_1AzK8DJumasawF8"
 CHANNEL_USERNAME = "@channellinksx"
 ADMIN_IDS = [8073033955]  # Replace with your actual admin user IDs
+WEBSITE_URL = ""  # Website URL - Admin will add later
 
 # Storage for admin sessions, deeplinks, and used files
 admin_sessions = {}  # Track admin upload sessions
 deeplinks = {}
-used_posters = set()  # Track used posters
-used_videos = set()   # Track used videos
+used_posters = set()  # Track used posters (for admin tracking only)
+used_videos = set()   # Track used videos (for admin tracking only)
 stored_posters = []   # Store available posters
 
 # User access tracking
 user_access = {}  # Track user access permissions and expiration
-
-# Access deeplinks (special links for 12-hour access)
-access_deeplinks = {}  # Track special access links
+user_funnel_progress = {}  # Track user progress through funnel
 
 # Generate unique deeplink for content
 def generate_deeplink(admin_id, video_id, poster_id):
@@ -32,14 +31,6 @@ def generate_deeplink(admin_id, video_id, poster_id):
     unique_string = f"{admin_id}_{video_id}_{poster_id}_{timestamp}"
     hash_object = hashlib.sha256(unique_string.encode())
     return hash_object.hexdigest()[:16]
-
-# Generate special access deeplink (for 12-hour access)
-def generate_access_deeplink():
-    timestamp = str(int(time.time()))
-    random_part = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    unique_string = f"access_{timestamp}_{random_part}"
-    hash_object = hashlib.sha256(unique_string.encode())
-    return f"access_{hash_object.hexdigest()[:20]}"
 
 # Security: Rate limiting
 def check_rate_limit(user_id):
@@ -86,67 +77,6 @@ async def check_joined(user_id, context):
         print(f"❌ Join check error: {e}")
         return False
 
-# Generate 12-hour access deeplink (Admin Command)
-async def generate_12hour_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    if not is_admin(user.id):
-        await update.message.reply_text("🚫 **Admin access required!**", parse_mode="Markdown")
-        return
-
-    # Generate special access deeplink
-    access_id = generate_access_deeplink()
-
-    # Store access deeplink info
-    access_deeplinks[access_id] = {
-        'created_at': datetime.now().isoformat(),
-        'created_by': user.id,
-        'used_count': 0,
-        'max_uses': 1000,  # Maximum uses allowed
-        'active': True
-    }
-
-    # Create the special deeplink
-    deeplink_url = f"https://t.me/{context.bot.username}?start={access_id}"
-
-    success_text = f"""
-✅ **12-Hour Access Deeplink Generated!**
-
-🔗 **Special Access Link:**
-`{deeplink_url}`
-
-⚡ **Features:**
-• Direct 12-hour access
-• No website verification needed
-• Channel join required only
-• Multiple users can use
-• Secure token-based system
-
-🔒 **Security:**
-• Unique encrypted token
-• Usage tracking enabled
-• Admin-controlled access
-
-📊 **Usage Stats:**
-• Max Uses: 1000
-• Current Uses: 0
-• Status: ACTIVE
-
-💡 **Share this link with users for instant 12-hour access!**
-    """
-
-    # Add copy and share buttons
-    keyboard = [
-        [InlineKeyboardButton("📋 Copy Link", url=f"https://t.me/share/url?url={deeplink_url}")],
-        [InlineKeyboardButton("📊 View Stats", callback_data=f"stats_{access_id}")]
-    ]
-
-    await update.message.reply_text(
-        success_text, 
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
 # Auto-post to channel with poster and deeplink
 async def post_to_channel(context, poster_file_id, deeplink_id, video_info):
     try:
@@ -156,9 +86,9 @@ async def post_to_channel(context, poster_file_id, deeplink_id, video_info):
         caption = f"""🎬 **NEW EXCLUSIVE CONTENT**
 
 🔥 **Premium Quality Video**
-📱 **12-Hour Access Required**
+📱 **Unlimited Access Available**
 
-⚡ **Get Instant Access:**
+⚡ **Watch Now:**
 👇 Click button below"""
 
         # Create button for deeplink
@@ -181,14 +111,9 @@ async def post_to_channel(context, poster_file_id, deeplink_id, video_info):
         print(f"❌ Channel posting error: {e}")
         return False
 
-# Enhanced /start command - Handle access deeplinks
+# Enhanced /start command - Handle content deeplinks only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
-    # Check if it's a special access deeplink
-    if context.args and context.args[0].startswith("access_"):
-        await handle_access_deeplink(update, context)
-        return
 
     # Check if it's a content deeplink
     if context.args:
@@ -202,8 +127,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 This bot is for **ADMIN USE ONLY**.
 
-🔗 **Regular users:** Access content via special deeplinks shared by admin
-📱 **Contact admin** for access links
+🔗 **Regular users:** Access content via deeplinks shared in channel
+📱 **Contact admin** for content links
 
 ⚠️ **Unauthorized access not allowed**
         """
@@ -221,139 +146,33 @@ This bot is for **ADMIN USE ONLY**.
 ✅ **After both uploads:**
 • Unique deeplink generated
 • Auto-posted to channel
-• Files marked as used (one-time only)
+• Unlimited user access enabled
 
-🔗 **Access Management:**
-• Use /generateaccess to create 12-hour access links
-• Share access links with users for instant access
-• Users need access link to view any content
+🔄 **New User Funnel:**
+1. User clicks content deeplink
+2. Channel join required
+3. Website visit required
+4. 24-hour access granted
+5. Content access enabled
 
 🔒 **Security Features:**
-• Burn-after-use system
-• Unique encrypted deeplinks
-• Admin-only access
-• Mandatory access link requirement
+• Admin-only uploads
+• Channel join mandatory
+• Website visit tracking
+• Time-limited access
 
 📊 **Current Status:**
 • Available Posters: {len([p for p in stored_posters if p['file_id'] not in used_posters])}
 • Used Posters: {len(used_posters)}
 • Used Videos: {len(used_videos)}
-• Active Access Links: {len([a for a in access_deeplinks.values() if a['active']])}
+• Active Users: {len([u for u in user_access.keys() if has_active_access(u)])}
 
 🚀 **Ready to upload? Send poster first!**
     """
 
     await update.message.reply_text(welcome_text, parse_mode="Markdown")
 
-# Handle special access deeplink (12-hour access)
-async def handle_access_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    access_id = context.args[0]
-
-    # Check if access deeplink exists
-    if access_id not in access_deeplinks:
-        await update.message.reply_text(
-            "❌ **Invalid Access Link!**\n\n⚠️ This access link is invalid or expired.\n📱 Contact admin for a valid access link.",
-            parse_mode="Markdown"
-        )
-        return
-
-    access_info = access_deeplinks[access_id]
-
-    # Check if access link is still active
-    if not access_info.get('active', False):
-        await update.message.reply_text(
-            "🚫 **Access Link Deactivated!**\n\n⚠️ This access link has been deactivated by admin.\n📱 Contact admin for a new access link.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # Check if user already has active access
-    if has_active_access(user.id):
-        current_access = user_access[user.id]
-        expires_at = datetime.fromisoformat(current_access['expires_at'])
-        expires_formatted = expires_at.strftime("%d %b %Y, %H:%M")
-
-        await update.message.reply_text(
-            f"✅ **You Already Have Active Access!**\n\n"
-            f"⏰ **Current Access:**\n"
-            f"• Expires: {expires_formatted}\n"
-            f"• Status: ACTIVE\n\n"
-            f"🎬 You can access all content until expiration.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # Check channel membership
-    joined = await check_joined(user.id, context)
-    if not joined:
-        keyboard = [
-            [InlineKeyboardButton("🔔 Join Channel First", url=f"https://t.me/{CHANNEL_USERNAME.strip('@')}")],
-            [InlineKeyboardButton("✅ I Joined - Get Access", callback_data=f"grant_access_{access_id}")]
-        ]
-        await update.message.reply_text(
-            f"🔒 **Channel Join Required!**\n\n"
-            f"📢 Join {CHANNEL_USERNAME} to get 12-hour access\n"
-            f"🎬 Then click 'Get Access' button", 
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-        return
-
-    # Grant 12-hour access directly
-    await grant_12hour_access(update, context, user.id, access_id)
-
-# Grant 12-hour access to user
-async def grant_12hour_access(update, context, user_id, access_id):
-    # Calculate expiration time (12 hours from now)
-    current_time = datetime.now()
-    expires_at = current_time + timedelta(hours=12)
-
-    # Store access information
-    user_access[user_id] = {
-        'granted_at': current_time.isoformat(),
-        'expires_at': expires_at.isoformat(),
-        'source': 'access_deeplink',
-        'access_id': access_id
-    }
-
-    # Update access deeplink usage
-    if access_id in access_deeplinks:
-        access_deeplinks[access_id]['used_count'] += 1
-        access_deeplinks[access_id]['last_used'] = current_time.isoformat()
-
-    # Format expiration time
-    expires_formatted = expires_at.strftime("%d %b %Y, %H:%M")
-
-    success_text = f"""
-🎉 **12-Hour Access Granted Successfully!**
-
-✅ **Access Details:**
-• Start: {current_time.strftime("%H:%M")}
-• Expires: {expires_formatted}
-• Duration: 12 hours
-• Status: ACTIVE
-
-🎬 **What you can access:**
-• All exclusive content
-• Premium videos
-• Special releases
-• Channel content
-
-🔒 **Security:** Time-limited access
-📱 **Usage:** Access any content deeplinks now
-
-💡 **Note:** Use content deeplinks from channel to watch videos
-⚠️ **Important:** Access expires automatically after 12 hours
-    """
-
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=success_text,
-        parse_mode="Markdown"
-    )
-
-# Handle content deeplinks (requires 12-hour access)
+# Handle content deeplinks - NEW FUNNEL
 async def handle_content_deeplink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deeplink_id = context.args[0]
     user = update.effective_user
@@ -372,43 +191,217 @@ async def handle_content_deeplink(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(error_text, parse_mode="Markdown")
         return
 
-    # Check if already used (one-time access)
-    link_info = deeplinks[deeplink_id]
-    if link_info.get('used', False):
-        await update.message.reply_text(
-            "🔥 **Content Already Accessed!**\n\n⚠️ This is a single-use content link\n🚨 Content has been accessed before\n\n📱 Contact admin for new content",
-            parse_mode="Markdown"
-        )
+    # Initialize user funnel progress
+    if user.id not in user_funnel_progress:
+        user_funnel_progress[user.id] = {
+            'current_deeplink': deeplink_id,
+            'step': 'channel_join',
+            'started_at': datetime.now().isoformat()
+        }
+
+    # Check if user already has 24-hour access
+    if has_active_access(user.id):
+        # User already has access, directly show content
+        await grant_content_access(update, context, deeplink_id)
         return
 
-    # Check if user has 12-hour access (MANDATORY)
-    if not has_active_access(user.id):
-        await update.message.reply_text(
-            "🚫 **12-Hour Access Required!**\n\n"
-            "⚠️ You need 12-hour access to view content\n"
-            "🔗 Get access link from admin first\n"
-            "📱 Use access link to get 12-hour access\n\n"
-            "❌ **No access = No content viewing**",
-            parse_mode="Markdown"
-        )
-        return
+    # Start funnel: Step 1 - Channel Join
+    await start_channel_join_step(update, context, deeplink_id)
 
-    # Check channel membership
+# Step 1: Channel Join Requirement
+async def start_channel_join_step(update, context, deeplink_id):
+    user = update.effective_user
+
+    # Check if already joined
     joined = await check_joined(user.id, context)
-    if not joined:
-        keyboard = [
-            [InlineKeyboardButton("🔔 Join Channel First", url=f"https://t.me/{CHANNEL_USERNAME.strip('@')}")],
-            [InlineKeyboardButton("✅ I Joined - Access Content", callback_data=f"access_content_{deeplink_id}")]
-        ]
-        await update.message.reply_text(
-            f"🔒 **Channel Join Required!**\n\n📢 Join {CHANNEL_USERNAME} to access content\n🎬 Then click 'Access Content'", 
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
+    if joined:
+        # Already joined, move to website step
+        await start_website_visit_step(update, context, deeplink_id)
         return
 
-    # Grant access to content
-    await grant_content_access(update, context, deeplink_id, link_info)
+    # Show channel join requirement
+    keyboard = [
+        [InlineKeyboardButton("🔔 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.strip('@')}")],
+        [InlineKeyboardButton("✅ I Joined - Continue", callback_data=f"joined_{deeplink_id}")]
+    ]
+
+    join_text = f"""
+🔒 **Step 1: Channel Join Required**
+
+📢 **Join our channel to continue:**
+{CHANNEL_USERNAME}
+
+🎬 **After joining:**
+• Click "I Joined - Continue" button
+• Complete verification process
+• Get 24-hour access to all content
+
+⚡ **Benefits of joining:**
+• Unlimited content access
+• Premium quality videos
+• Latest updates and releases
+
+👇 **Join now to proceed:**
+    """
+
+    await context.bot.send_message(
+        chat_id=user.id,
+        text=join_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+# Step 2: Website Visit Requirement
+async def start_website_visit_step(update, context, deeplink_id):
+    user = update.effective_user
+
+    # Update funnel progress
+    if user.id in user_funnel_progress:
+        user_funnel_progress[user.id]['step'] = 'website_visit'
+        user_funnel_progress[user.id]['channel_joined_at'] = datetime.now().isoformat()
+
+    # Website visit step
+    keyboard = [
+        [InlineKeyboardButton("🌐 Visit Website", url=WEBSITE_URL if WEBSITE_URL else "https://example.com")],
+        [InlineKeyboardButton("✅ I Visited - Get Access", callback_data=f"visited_{deeplink_id}")]
+    ]
+
+    website_text = f"""
+✅ **Step 1 Complete: Channel Joined**
+
+🌐 **Step 2: Website Visit Required**
+
+📱 **Complete verification:**
+• Click "Visit Website" button
+• Wait for page to load completely
+• Return here and click "Get Access"
+
+🎁 **After website visit:**
+• Get 24-hour unlimited access
+• Access all premium content
+• No restrictions on viewing
+
+⚡ **Quick Process:**
+• Takes only 30 seconds
+• One-time verification
+• Instant access granted
+
+👇 **Visit website to continue:**
+    """
+
+    await context.bot.send_message(
+        chat_id=user.id,
+        text=website_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+# Step 3: Grant 24-Hour Access
+async def grant_24hour_access(update, context, user_id, deeplink_id):
+    # Calculate expiration time (24 hours from now)
+    current_time = datetime.now()
+    expires_at = current_time + timedelta(hours=24)
+
+    # Store access information
+    user_access[user_id] = {
+        'granted_at': current_time.isoformat(),
+        'expires_at': expires_at.isoformat(),
+        'source': 'content_funnel',
+        'deeplink_id': deeplink_id
+    }
+
+    # Update funnel progress
+    if user_id in user_funnel_progress:
+        user_funnel_progress[user_id]['step'] = 'access_granted'
+        user_funnel_progress[user_id]['website_visited_at'] = current_time.isoformat()
+        user_funnel_progress[user_id]['access_granted_at'] = current_time.isoformat()
+
+    # Format expiration time
+    expires_formatted = expires_at.strftime("%d %b %Y, %H:%M")
+
+    success_text = f"""
+🎉 **24-Hour Access Granted Successfully!**
+
+✅ **Verification Complete:**
+• Channel: ✅ Joined
+• Website: ✅ Visited
+• Access: ✅ Granted
+
+⏰ **Access Details:**
+• Start: {current_time.strftime("%H:%M")}
+• Expires: {expires_formatted}
+• Duration: 24 hours
+• Status: ACTIVE
+
+🎬 **What you can access:**
+• All exclusive content
+• Premium videos
+• Unlimited viewing
+• Latest releases
+
+🔥 **Now accessing your requested content...**
+    """
+
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=success_text,
+        parse_mode="Markdown"
+    )
+
+    # Automatically show the content they originally requested
+    await grant_content_access_by_user_id(context, user_id, deeplink_id)
+
+# Grant access to video content
+async def grant_content_access(update, context, deeplink_id):
+    user_id = update.effective_user.id
+    await grant_content_access_by_user_id(context, user_id, deeplink_id)
+
+async def grant_content_access_by_user_id(context, user_id, deeplink_id):
+    try:
+        link_info = deeplinks[deeplink_id]
+        video_file_id = link_info['video_file_id']
+        video_info = link_info['video_info']
+
+        # Get access expiration time
+        expires_at = datetime.fromisoformat(user_access[user_id]['expires_at'])
+        expires_formatted = expires_at.strftime("%d %b %Y, %H:%M")
+
+        caption_text = f"""
+🎬 **Exclusive Content Access**
+
+✅ **Successfully Accessed via 24-Hour Access**
+
+📊 **Video Details:**
+• **Size:** {format_file_size(video_info['file_size'])}
+• **Duration:** {format_duration(video_info['duration'])}
+• **Quality:** Premium
+
+⏰ **Access Status:**
+• 24-Hour Access: ACTIVE
+• Expires: {expires_formatted}
+
+🔥 **Unlimited Access:** You can access all content until expiration
+⚡ **No Restrictions:** Watch anytime within 24 hours
+
+🎉 **Enjoy your exclusive content!**
+        """
+
+        # Send video
+        await context.bot.send_video(
+            chat_id=user_id,
+            video=video_file_id,
+            caption=caption_text,
+            parse_mode="Markdown"
+        )
+
+        print(f"✅ Content accessed by user {user_id} via deeplink {deeplink_id}")
+
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ **Error accessing content:** {str(e)}",
+            parse_mode="Markdown"
+        )
 
 # Handle poster uploads (Step 1)
 async def handle_poster_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -425,15 +418,7 @@ async def handle_poster_upload(update: Update, context: ContextTypes.DEFAULT_TYP
     photo = update.message.photo[-1]
     file_id = photo.file_id
 
-    # Check if poster already used
-    if file_id in used_posters:
-        await update.message.reply_text(
-            "⚠️ **Poster Already Used!**\n\n🔥 This poster has been used before.\n📸 Please upload a new poster.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # Store poster
+    # Store poster (no burn-after-use for tracking)
     poster_info = {
         'file_id': file_id,
         'file_size': photo.file_size or 0,
@@ -460,7 +445,7 @@ async def handle_poster_upload(update: Update, context: ContextTypes.DEFAULT_TYP
 🎥 **Next Step:** Upload Video Now
 ⏳ **Waiting for video upload...**
 
-🔒 **Security:** Poster reserved for next video
+🔒 **Note:** Poster ready for unlimited user access
     """
 
     await update.message.reply_text(success_text, parse_mode="Markdown")
@@ -488,14 +473,6 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     video = update.message.video
     video_file_id = video.file_id
 
-    # Check if video already used
-    if video_file_id in used_videos:
-        await update.message.reply_text(
-            "⚠️ **Video Already Used!**\n\n🔥 This video has been used before.\n🎥 Please upload a new video.",
-            parse_mode="Markdown"
-        )
-        return
-
     # Get pending poster
     poster_info = admin_sessions[user.id]['pending_poster']
     poster_file_id = poster_info['file_id']
@@ -505,7 +482,7 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Generate unique deeplink
     deeplink_id = generate_deeplink(user.id, video_file_id, poster_file_id)
 
-    # Store deeplink info
+    # Store deeplink info (UNLIMITED ACCESS)
     deeplinks[deeplink_id] = {
         'video_file_id': video_file_id,
         'poster_file_id': poster_file_id,
@@ -517,13 +494,14 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         },
         'timestamp': datetime.now().isoformat(),
         'caption': update.message.caption or "",
-        'used': False
+        'unlimited_access': True,  # New flag for unlimited access
+        'access_count': 0  # Track how many users accessed
     }
 
     # Post to channel
     channel_posted = await post_to_channel(context, poster_file_id, deeplink_id, video)
 
-    # Mark files as used (BURN AFTER USE)
+    # Mark files as used for admin tracking only
     used_posters.add(poster_file_id)
     used_videos.add(video_file_id)
 
@@ -549,15 +527,17 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 🔗 **Content Deeplink:**
 `{deeplink_url}`
 
-🔥 **Security Status:**
-• Poster: USED (Burned)
-• Video: USED (Burned)
-• Content Link: ACTIVE
+🔥 **Access Status:**
+• Unlimited Users: ✅ Enabled
+• Funnel System: ✅ Active
+• 24-Hour Access: ✅ Required
 
 📢 **Channel:** {CHANNEL_USERNAME}
 
-⚠️ **Important:** Users need 12-hour access to view this content!
-💡 **Note:** Share access links first, then users can access content.
+⚡ **User Flow:**
+1. Content Link → 2. Channel Join → 3. Website Visit → 4. 24h Access → 5. Video Access
+
+💡 **Note:** Users will go through complete funnel to get 24-hour access!
     """
 
     # Add share button
@@ -571,62 +551,13 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode="Markdown"
     )
 
-# Grant access to video content
-async def grant_content_access(update, context, deeplink_id, link_info):
-    try:
-        video_file_id = link_info['video_file_id']
-        video_info = link_info['video_info']
-        user_id = update.effective_user.id
-
-        # Mark as used (BURN AFTER USE)
-        deeplinks[deeplink_id]['used'] = True
-        deeplinks[deeplink_id]['accessed_by'] = user_id
-        deeplinks[deeplink_id]['access_time'] = datetime.now().isoformat()
-
-        # Get access expiration time
-        expires_at = datetime.fromisoformat(user_access[user_id]['expires_at'])
-        expires_formatted = expires_at.strftime("%d %b %Y, %H:%M")
-
-        caption_text = f"""
-🎬 **Exclusive Content Access**
-
-✅ **Successfully Accessed via 12-Hour Access**
-
-📊 **Video Details:**
-• **Size:** {format_file_size(video_info['file_size'])}
-• **Duration:** {format_duration(video_info['duration'])}
-• **Quality:** Premium
-
-⏰ **Access Status:**
-• 12-Hour Access: ACTIVE
-• Expires: {expires_formatted}
-
-🔥 **Single-Use Content:** This link is now BURNED
-⚠️ **No Re-downloads:** Content accessed once only
-
-🎉 **Enjoy your exclusive content!**
-        """
-
-        # Send video
-        await context.bot.send_video(
-            chat_id=update.effective_chat.id,
-            video=video_file_id,
-            caption=caption_text,
-            parse_mode="Markdown"
-        )
-
-        print(f"✅ Content accessed by user {user_id} via deeplink {deeplink_id}")
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ **Error accessing content:** {str(e)}", parse_mode="Markdown")
-
 # Callback handler for buttons
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data.startswith("grant_access_"):
-        access_id = query.data.split("_")[2]
+    if query.data.startswith("joined_"):
+        deeplink_id = query.data.split("_")[1]
         user = query.from_user
 
         # Check channel join again
@@ -638,49 +569,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Check if access link still valid
-        if access_id not in access_deeplinks or not access_deeplinks[access_id].get('active', False):
-            await query.edit_message_text(
-                "❌ **Access link expired or deactivated!**\n\n📱 Contact admin for new access link",
-                parse_mode="Markdown"
-            )
-            return
+        # Move to website visit step
+        await start_website_visit_step(query, context, deeplink_id)
 
-        # Grant 12-hour access
-        await grant_12hour_access(query, context, user.id, access_id)
-
-    elif query.data.startswith("access_content_"):
-        deeplink_id = query.data.split("_")[2]
+    elif query.data.startswith("visited_"):
+        deeplink_id = query.data.split("_")[1]
         user = query.from_user
 
-        # Check channel join again
+        # Check channel join again (security)
         joined = await check_joined(user.id, context)
         if not joined:
             await query.edit_message_text(
-                "❌ **Still not joined!**\n\n🔸 Please join channel first\n🔸 Then try again",
+                "❌ **Channel membership required!**\n\n🔸 Please join channel first",
                 parse_mode="Markdown"
             )
             return
 
-        # Check if content link still valid
-        if deeplink_id not in deeplinks or deeplinks[deeplink_id].get('used', False):
-            await query.edit_message_text(
-                "❌ **Content link expired or already used!**\n\n🔥 Single-use security protocol",
-                parse_mode="Markdown"
-            )
-            return
-
-        # Check 12-hour access
-        if not has_active_access(user.id):
-            await query.edit_message_text(
-                "🚫 **12-Hour Access Required!**\n\n⚠️ Get access link from admin first",
-                parse_mode="Markdown"
-            )
-            return
-
-        # Grant access to content
-        link_info = deeplinks[deeplink_id]
-        await grant_content_access(query, context, deeplink_id, link_info)
+        # Grant 24-hour access
+        await grant_24hour_access(query, context, user.id, deeplink_id)
 
 # Utility functions
 def format_file_size(size_bytes):
@@ -712,41 +618,42 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     total_deeplinks = len(deeplinks)
-    used_deeplinks = len([d for d in deeplinks.values() if d.get('used', False)])
-    active_deeplinks = total_deeplinks - used_deeplinks
-
     active_users = len([u for u in user_access.keys() if has_active_access(u)])
-    total_access_links = len(access_deeplinks)
-    active_access_links = len([a for a in access_deeplinks.values() if a['active']])
+    total_funnel_users = len(user_funnel_progress)
+
+    # Funnel analytics
+    channel_joined = len([u for u in user_funnel_progress.values() if u.get('step') in ['website_visit', 'access_granted']])
+    website_visited = len([u for u in user_funnel_progress.values() if u.get('step') == 'access_granted'])
 
     stats_text = f"""
 📊 **Admin Statistics**
 
 🎬 **Content Status:**
 • Total Content Links: {total_deeplinks}
-• Active Content Links: {active_deeplinks}
-• Used Content Links: {used_deeplinks}
+• Unlimited Access: ✅ Enabled
+• Total Content Access: {sum([d.get('access_count', 0) for d in deeplinks.values()])}
 
-📸 **Poster Status:**
-• Available: {len([p for p in stored_posters if p['file_id'] not in used_posters])}
-• Used: {len(used_posters)}
-
-🎥 **Video Status:**
+📸 **Upload Status:**
+• Available Posters: {len([p for p in stored_posters if p['file_id'] not in used_posters])}
+• Used Posters: {len(used_posters)}
 • Used Videos: {len(used_videos)}
 
-🔗 **Access Links:**
-• Total Access Links: {total_access_links}
-• Active Access Links: {active_access_links}
-• Total Usage: {sum([a['used_count'] for a in access_deeplinks.values()])}
+👥 **User Analytics:**
+• Active 24h Users: {active_users}
+• Total Funnel Users: {total_funnel_users}
+• Channel Joined: {channel_joined}
+• Website Visited: {website_visited}
+• Conversion Rate: {(website_visited/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%
 
-👥 **User Access:**
-• Active Users: {active_users}
+🔄 **Funnel Performance:**
+• Step 1 (Channel): {channel_joined}/{total_funnel_users} ({(channel_joined/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
+• Step 2 (Website): {website_visited}/{total_funnel_users} ({(website_visited/total_funnel_users*100) if total_funnel_users > 0 else 0:.1f}%)
 
-🔒 **Security Status:**
-• Burn System: ✅ Active
-• One-time Use: ✅ Enforced
-• Admin-Only: ✅ Enabled
-• 12-Hour Access: ✅ Mandatory
+🔒 **System Status:**
+• Unlimited Content: ✅ Active
+• Funnel System: ✅ Running
+• 24-Hour Access: ✅ Mandatory
+• Website Integration: {'✅ Ready' if WEBSITE_URL else '⏳ Pending'}
 
 📈 **System Health:** Optimal
     """
@@ -762,14 +669,14 @@ async def admin_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Clear all data
-    global used_posters, used_videos, stored_posters, deeplinks, admin_sessions, user_access, access_deeplinks
+    global used_posters, used_videos, stored_posters, deeplinks, admin_sessions, user_access, user_funnel_progress
     used_posters.clear()
     used_videos.clear()
     stored_posters.clear()
     deeplinks.clear()
     admin_sessions.clear()
     user_access.clear()
-    access_deeplinks.clear()
+    user_funnel_progress.clear()
 
     await update.message.reply_text(
         "🔄 **System Reset Complete!**\n\n✅ All data cleared\n🚀 Ready for fresh uploads",
@@ -782,7 +689,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Main function
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Admin-Only Media Bot with 12-Hour Access System...")
+    print("🚀 Starting Enhanced Funnel-Based Media Bot...")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -790,7 +697,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", admin_stats))
     app.add_handler(CommandHandler("reset", admin_reset))
-    app.add_handler(CommandHandler("generateaccess", generate_12hour_access))
     app.add_handler(CallbackQueryHandler(button_callback))
 
     # Separate handlers for poster and video
@@ -800,16 +706,16 @@ if __name__ == "__main__":
     # Error handler
     app.add_error_handler(error_handler)
 
-    print("🤖 Enhanced Admin-Only Media Bot is Running...")
+    print("🤖 Enhanced Funnel-Based Media Bot is Running...")
     print(f"📢 Channel: {CHANNEL_USERNAME}")
-    print("✅ Features:")
-    print("   🔥 Burn-after-use system")
+    print("✅ New Features:")
+    print("   🔄 Complete user funnel system")
     print("   📸 Poster + Video pairing")
-    print("   🔗 Unique deeplink generation")
+    print("   🔗 Unlimited content access")
     print("   📱 Auto channel posting")
     print("   🚫 Admin-only uploads")
-    print("   ⚡ One-time access system")
-    print("   🔒 12-hour access requirement")
-    print("   🎯 Special access deeplinks")
+    print("   🌐 Website visit requirement")
+    print("   🔒 24-hour access system")
+    print("   📊 Funnel analytics tracking")
 
     app.run_polling()
