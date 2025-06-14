@@ -1594,9 +1594,7 @@ async def auto_post_to_channel(context, content_state, deeplink):
             chat_id=CHANNEL_ID,
             photo=content_state["poster_file_id"],
             caption=caption,
-            parse_mode=Parse
-
-Mode.MARKDOWN,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
         return True
