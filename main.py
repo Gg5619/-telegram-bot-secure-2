@@ -21,7 +21,7 @@ from contextlib import contextmanager
 
 # Security Configuration
 BOT_TOKEN='7721980677:AAHalo2tzPZfBY4HJgMpYVflStxrbzfiMFg'
-ADMIN_ID='8073033955'
+ADMIN_ID = 8073033955
 CHANNEL_ID='@eighteenplusdrops'
 VIP_CHANNEL_ID='@channellinksx'
 UPI_ID='arvindmanro4@okhdfcbank'
