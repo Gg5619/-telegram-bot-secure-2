@@ -20,14 +20,14 @@ from io import BytesIO
 from contextlib import contextmanager
 
 # Security Configuration
-BOT_TOKEN=7721980677:AAHalo2tzPZfBY4HJgMpYVflStxrbzfiMFg
-ADMIN_ID=8073033955
-CHANNEL_ID=@eighteenplusdrops
-VIP_CHANNEL_ID=@channellinksx
-UPI_ID=arvindmanro4@okhdfcbank
-BOT_USERNAME=@Fileprovider_robot
+BOT_TOKEN='7721980677:AAHalo2tzPZfBY4HJgMpYVflStxrbzfiMFg'
+ADMIN_ID='8073033955'
+CHANNEL_ID='@eighteenplusdrops'
+VIP_CHANNEL_ID='@channellinksx'
+UPI_ID='arvindmanro4@okhdfcbank'
+BOT_USERNAME='@Fileprovider_robot'
 SECRET_KEY=your_secret_key_here
-ENCRYPTION_KEY=your_encryption_key_here
+ENCRYPTION_KEY=your_encryption_key_her
 VIP_PRICE = 199
 
 # Generate or load encryption key
