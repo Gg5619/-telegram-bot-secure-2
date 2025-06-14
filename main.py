@@ -20,12 +20,14 @@ from io import BytesIO
 from contextlib import contextmanager
 
 # Security Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@your_channel")
-VIP_CHANNEL_ID = os.getenv("VIP_CHANNEL_ID", "@your_vip_channel")
-UPI_ID = os.getenv("UPI_ID", "your-upi-id@paytm")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "your_bot_username")
+BOT_TOKEN=7721980677:AAHalo2tzPZfBY4HJgMpYVflStxrbzfiMFg
+ADMIN_ID=8073033955
+CHANNEL_ID=@eighteenplusdrops
+VIP_CHANNEL_ID=@channellinksx
+UPI_ID=arvindmanro4@okhdfcbank
+BOT_USERNAME=@Fileprovider_robot
+SECRET_KEY=your_secret_key_here
+ENCRYPTION_KEY=your_encryption_key_here
 VIP_PRICE = 199
 
 # Generate or load encryption key
