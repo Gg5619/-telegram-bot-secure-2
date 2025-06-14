@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: telegram-token-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: VIP_CHANNEL_ID
+        sync: false
+      - key: UPI_ID
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+
