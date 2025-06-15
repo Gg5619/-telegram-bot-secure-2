@@ -17,11 +17,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.requests import Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt
-from cryptography.fernet import Fernetfrom
- typing import Optional, List, Dict
+from cryptography.fernet import F
+ernetfrom typing import Optional, List, Dict
 from pydantic import BaseModel
 import orjson
 from pydantic import Field
+
 
 load_dotenv()
 
