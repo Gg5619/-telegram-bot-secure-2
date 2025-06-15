@@ -34,13 +34,10 @@ import hashlib
 import secrets
 import time
 import sqlite3
-import aiohttp
 import schedule
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, asdict
-from enum import Enum
-import re
+from dataclasses import dataclass
 from collections import defaultdict
 import threading
 from contextlib import asynccontextmanager
@@ -48,13 +45,11 @@ from contextlib import asynccontextmanager
 # Telegram Bot API
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, 
-    ReplyKeyboardMarkup, KeyboardButton, WebApp,
-    InputMediaPhoto, InputMediaVideo, InputMediaDocument
+    ReplyKeyboardMarkup, KeyboardButton
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
-    CallbackQueryHandler, ContextTypes, filters,
-    ConversationHandler, PreCheckoutQueryHandler
+    CallbackQueryHandler, ContextTypes, filters
 )
 
 # Configuration Management
@@ -120,6 +115,8 @@ class LanguageManager:
                 "referral_bonus": "🎉 Referral bonus earned: ₹{amount}",
                 "achievement_unlocked": "🏆 Achievement Unlocked: {achievement}",
                 "level_up": "⬆️ Level Up! You are now Level {level}",
+                "help_text": "🆘 **Help & Support**\n\n📋 **Available Commands:**\n/start - Start the bot\n/help - Show this help\n/profile - View your profile\n/vip - VIP subscription plans\n/referral - Your referral info\n/achievements - Your achievements\n/analytics - Your analytics\n/admin - Admin panel (admin only)\n\n💬 **Need Help?** Contact @support",
+                "back_to_menu": "🔙 Back to Menu"
             },
             "hi": {
                 "welcome": "🎉 सबसे उन्नत फ़ाइल शेयरिंग बॉट में आपका स्वागत है!\n\n🚀 हमारे VIP प्लान के साथ प्रीमियम कंटेंट पाएं\n💎 रेफरल के माध्यम से रिवार्ड कमाएं\n🏆 उपलब्धियां अनलॉक करें और लेवल अप करें!",
@@ -141,6 +138,8 @@ class LanguageManager:
                 "referral_bonus": "🎉 रेफरल बोनस मिला: ₹{amount}",
                 "achievement_unlocked": "🏆 उपलब्धि अनलॉक: {achievement}",
                 "level_up": "⬆️ लेवल अप! आप अब लेवल {level} हैं",
+                "help_text": "🆘 **सहायता और समर्थन**\n\n📋 **उपलब्ध कमांड:**\n/start - बॉट शुरू करें\n/help - यह सहायता दिखाएं\n/profile - अपनी प्रोफ़ाइल देखें\n/vip - VIP सब्सक्रिप्शन प्लान\n/referral - आपकी रेफरल जानकारी\n/achievements - आपकी उपलब्धियां\n/analytics - आपका एनालिटिक्स\n/admin - एडमिन पैनल (केवल एडमिन)\n\n💬 **सहायता चाहिए?** संपर्क करें @support",
+                "back_to_menu": "🔙 मेनू पर वापस"
             }
         }
     
@@ -156,7 +155,6 @@ class DatabaseManager:
     
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self.connection_pool = []
         self.cache = {}
         self.cache_timestamps = {}
         self.init_database()
@@ -259,6 +257,7 @@ class DatabaseManager:
                     rating REAL DEFAULT 0.0,
                     rating_count INTEGER DEFAULT 0,
                     status TEXT DEFAULT 'active',
+                    trending_score REAL DEFAULT 0.0,
                     FOREIGN KEY (uploader_id) REFERENCES users (user_id)
                 )
             ''')
@@ -392,8 +391,20 @@ class DatabaseManager:
         if not updates:
             return False
         
-        set_clause = ', '.join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [user_id]
+        # Handle special SQL expressions
+        set_clauses = []
+        values = []
+        
+        for key, value in updates.items():
+            if isinstance(value, str) and '+' in value and key in value:
+                # Handle expressions like 'total_referrals + 1'
+                set_clauses.append(f"{key} = {value}")
+            else:
+                set_clauses.append(f"{key} = ?")
+                values.append(value)
+        
+        set_clause = ', '.join(set_clauses)
+        values.append(user_id)
         
         async with self.get_connection() as conn:
             conn.execute(f"UPDATE users SET {set_clause} WHERE user_id = ?", values)
@@ -574,26 +585,19 @@ class RecommendationEngine:
         
         # Get content based on user preferences
         async with self.db.get_connection() as conn:
-            # Collaborative filtering approach
+            # Simple recommendation query
             cursor = conn.execute('''
-                SELECT c.*, AVG(f.rating) as avg_rating, COUNT(f.rating) as rating_count
+                SELECT c.*, AVG(COALESCE(f.rating, 0)) as avg_rating, COUNT(f.rating) as rating_count
                 FROM content c
                 LEFT JOIN feedback f ON c.id = f.content_id
                 WHERE c.status = 'active'
-                AND c.access_level IN (?, 'free')
+                AND (c.access_level = 'free' OR c.access_level = ?)
                 GROUP BY c.id
                 ORDER BY 
-                    CASE WHEN c.category IN ({}) THEN 1 ELSE 2 END,
-                    avg_rating DESC,
-                    c.download_count DESC
+                    c.download_count DESC,
+                    avg_rating DESC
                 LIMIT ?
-            '''.format(','.join(['?' for _ in user_profile['preferred_categories']])),
-                (
-                    user_profile['access_level'],
-                    *user_profile['preferred_categories'],
-                    limit
-                )
-            )
+            ''', (user_profile['access_level'], limit))
             
             recommendations = [dict(row) for row in cursor.fetchall()]
         
@@ -602,6 +606,8 @@ class RecommendationEngine:
     async def _build_user_profile(self, user_id: int) -> Dict:
         """Build user preference profile"""
         user = await self.db.get_user(user_id)
+        if not user:
+            return {'user_id': user_id, 'access_level': 'free', 'preferred_categories': ['general'], 'activity_level': 0}
         
         # Analyze user's download history
         async with self.db.get_connection() as conn:
@@ -692,7 +698,8 @@ class PaymentManager:
             conn.commit()
         
         # Generate UPI payment link
-        upi_link = f"upi://pay?pa={BotConfig().UPI_ID}&pn=FileProvider&am={amount}&cu=INR&tn=VIP_{plan}_{transaction_id}"
+        config = BotConfig()
+        upi_link = f"upi://pay?pa={config.UPI_ID}&pn=FileProvider&am={amount}&cu=INR&tn=VIP_{plan}_{transaction_id}"
         
         return {
             'transaction_id': transaction_id,
@@ -773,29 +780,32 @@ class AnalyticsManager:
                 FROM user_analytics 
                 WHERE user_id = ?
             ''', (user_id,))
-            basic_stats = dict(cursor.fetchone())
+            result = cursor.fetchone()
+            basic_stats = dict(result) if result else {'active_days': 0, 'total_events': 0, 'last_activity': None}
             
             # Download analytics
             cursor = conn.execute('''
                 SELECT 
                     COUNT(*) as total_downloads,
                     COUNT(DISTINCT DATE(download_date)) as download_days,
-                    AVG(file_size) as avg_file_size
+                    AVG(COALESCE(file_size, 0)) as avg_file_size
                 FROM downloads 
                 WHERE user_id = ?
             ''', (user_id,))
-            download_stats = dict(cursor.fetchone())
+            result = cursor.fetchone()
+            download_stats = dict(result) if result else {'total_downloads': 0, 'download_days': 0, 'avg_file_size': 0}
             
             # Revenue analytics
             cursor = conn.execute('''
                 SELECT 
-                    SUM(amount) as total_spent,
+                    SUM(COALESCE(amount, 0)) as total_spent,
                     COUNT(*) as total_transactions,
                     MAX(completed_at) as last_payment
                 FROM transactions 
                 WHERE user_id = ? AND status = 'completed'
             ''', (user_id,))
-            revenue_stats = dict(cursor.fetchone())
+            result = cursor.fetchone()
+            revenue_stats = dict(result) if result else {'total_spent': 0, 'total_transactions': 0, 'last_payment': None}
         
         return {
             'basic': basic_stats,
@@ -815,30 +825,33 @@ class AnalyticsManager:
                     COUNT(CASE WHEN DATE(registration_date) = DATE('now') THEN 1 END) as new_users_today
                 FROM users
             ''')
-            user_metrics = dict(cursor.fetchone())
+            result = cursor.fetchone()
+            user_metrics = dict(result) if result else {'total_users': 0, 'vip_users': 0, 'daily_active_users': 0, 'new_users_today': 0}
             
             # Revenue metrics
             cursor = conn.execute('''
                 SELECT 
-                    SUM(amount) as total_revenue,
-                    SUM(CASE WHEN DATE(completed_at) = DATE('now') THEN amount ELSE 0 END) as daily_revenue,
+                    SUM(COALESCE(amount, 0)) as total_revenue,
+                    SUM(CASE WHEN DATE(completed_at) = DATE('now') THEN COALESCE(amount, 0) ELSE 0 END) as daily_revenue,
                     COUNT(*) as total_transactions,
-                    AVG(amount) as avg_transaction_value
+                    AVG(COALESCE(amount, 0)) as avg_transaction_value
                 FROM transactions 
                 WHERE status = 'completed'
             ''')
-            revenue_metrics = dict(cursor.fetchone())
+            result = cursor.fetchone()
+            revenue_metrics = dict(result) if result else {'total_revenue': 0, 'daily_revenue': 0, 'total_transactions': 0, 'avg_transaction_value': 0}
             
             # Content metrics
             cursor = conn.execute('''
                 SELECT 
                     COUNT(*) as total_content,
-                    SUM(download_count) as total_downloads,
-                    AVG(rating) as avg_rating
+                    SUM(COALESCE(download_count, 0)) as total_downloads,
+                    AVG(COALESCE(rating, 0)) as avg_rating
                 FROM content 
                 WHERE status = 'active'
             ''')
-            content_metrics = dict(cursor.fetchone())
+            result = cursor.fetchone()
+            content_metrics = dict(result) if result else {'total_content': 0, 'total_downloads': 0, 'avg_rating': 0}
         
         return {
             'users': user_metrics,
@@ -861,12 +874,6 @@ class EnterpriseBot:
         self.security = SecurityManager(self.db)
         self.payments = PaymentManager(self.db)
         self.analytics = AnalyticsManager(self.db)
-        
-        # Conversation states
-        self.LANGUAGE_SELECTION = 1
-        self.MAIN_MENU = 2
-        self.VIP_PURCHASE = 3
-        self.FEEDBACK = 4
         
         # Initialize application
         self.application = Application.builder().token(self.config.BOT_TOKEN).build()
@@ -893,84 +900,179 @@ class EnterpriseBot:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Enhanced start command with referral processing"""
-        user = update.effective_user
-        
-        # Track analytics
-        await self.analytics.track_event(user.id, "bot_start")
-        
-        # Check if user exists
-        existing_user = await self.db.get_user(user.id)
-        
-        if not existing_user:
-            # Process referral if present
-            referrer_id = None
-            if context.args and context.args[0].startswith('ref_'):
-                referral_code = context.args[0]
-                async with self.db.get_connection() as conn:
-                    cursor = conn.execute("SELECT user_id FROM users WHERE referral_code = ?", (referral_code,))
-                    referrer = cursor.fetchone()
-                    if referrer:
-                        referrer_id = referrer['user_id']
+        try:
+            user = update.effective_user
             
-            # Create new user
-            user_data = {
-                'user_id': user.id,
-                'username': user.username,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'language_code': user.language_code or 'en',
-                'referred_by': referrer_id
-            }
+            # Track analytics
+            await self.analytics.track_event(user.id, "bot_start")
             
-            await self.db.create_user(user_data)
+            # Check if user exists
+            existing_user = await self.db.get_user(user.id)
             
-            # Process referral bonus
-            if referrer_id:
-                await self.referrals.process_referral(referrer_id, user.id)
-                # Update referrer's count
-                await self.db.update_user(referrer_id, {'total_referrals': 'total_referrals + 1'})
-        else:
-            # Update last activity
-            await self.db.update_user(user.id, {'last_activity': datetime.now()})
-        
-        # Show language selection for new users
-        user_lang = existing_user['language_code'] if existing_user else 'en'
-        
-        keyboard = [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")],
-            [InlineKeyboardButton("🇮🇳 हिंदी", callback_data="lang_hi")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        welcome_text = self.lang.get_text(user_lang, "welcome")
-        
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=reply_markup,
-            parse_mode='HTML'
-        )
+            if not existing_user:
+                # Process referral if present
+                referrer_id = None
+                if context.args and len(context.args) > 0 and context.args[0].startswith('ref_'):
+                    referral_code = context.args[0]
+                    async with self.db.get_connection() as conn:
+                        cursor = conn.execute("SELECT user_id FROM users WHERE referral_code = ?", (referral_code,))
+                        referrer = cursor.fetchone()
+                        if referrer:
+                            referrer_id = referrer['user_id']
+                
+                # Create new user
+                user_data = {
+                    'user_id': user.id,
+                    'username': user.username or '',
+                    'first_name': user.first_name or '',
+                    'last_name': user.last_name or '',
+                    'language_code': user.language_code or 'en',
+                    'referred_by': referrer_id
+                }
+                
+                await self.db.create_user(user_data)
+                
+                # Process referral bonus
+                if referrer_id:
+                    await self.referrals.process_referral(referrer_id, user.id)
+                    # Update referrer's count
+                    await self.db.update_user(referrer_id, {'total_referrals': 'total_referrals + 1'})
+            else:
+                # Update last activity
+                await self.db.update_user(user.id, {'last_activity': datetime.now().isoformat()})
+            
+            # Show language selection for new users
+            user_lang = existing_user['language_code'] if existing_user else 'en'
+            
+            keyboard = [
+                [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")],
+                [InlineKeyboardButton("🇮🇳 हिंदी", callback_data="lang_hi")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            welcome_text = self.lang.get_text(user_lang, "welcome")
+            
+            await update.message.reply_text(
+                welcome_text,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logging.error(f"Error in start_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show help information"""
+        try:
+            user = await self.db.get_user(update.effective_user.id)
+            lang_code = user['language_code'] if user else 'en'
+            
+            help_text = self.lang.get_text(lang_code, "help_text")
+            
+            keyboard = [
+                [InlineKeyboardButton(self.lang.get_text(lang_code, "back_to_menu"), callback_data="menu_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                help_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Error in help_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def profile_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user profile"""
+        try:
+            user = await self.db.get_user(update.effective_user.id)
+            if not user:
+                await update.message.reply_text("❌ User not found. Please use /start first.")
+                return
+            
+            await self._show_profile_inline(update.message, user, user['language_code'])
+        except Exception as e:
+            logging.error(f"Error in profile_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def vip_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show VIP plans"""
+        try:
+            user = await self.db.get_user(update.effective_user.id)
+            lang_code = user['language_code'] if user else 'en'
+            
+            await self._show_vip_plans_inline(update.message, lang_code)
+        except Exception as e:
+            logging.error(f"Error in vip_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def referral_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show referral information"""
+        try:
+            user = await self.db.get_user(update.effective_user.id)
+            if not user:
+                await update.message.reply_text("❌ User not found. Please use /start first.")
+                return
+            
+            await self._show_referrals_inline(update.message, user, user['language_code'])
+        except Exception as e:
+            logging.error(f"Error in referral_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def achievements_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user achievements"""
+        try:
+            user = await self.db.get_user(update.effective_user.id)
+            if not user:
+                await update.message.reply_text("❌ User not found. Please use /start first.")
+                return
+            
+            await self._show_achievements_inline(update.message, user, user['language_code'])
+        except Exception as e:
+            logging.error(f"Error in achievements_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def analytics_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user analytics"""
+        try:
+            user = await self.db.get_user(update.effective_user.id)
+            if not user:
+                await update.message.reply_text("❌ User not found. Please use /start first.")
+                return
+            
+            await self._show_user_analytics_inline(update.message, user, user['language_code'])
+        except Exception as e:
+            logging.error(f"Error in analytics_command: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
     
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all callback queries"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        data = query.data
-        
-        # Track callback analytics
-        await self.analytics.track_event(user_id, "callback_query", {"data": data})
-        
-        if data.startswith("lang_"):
-            await self._handle_language_selection(query, data)
-        elif data.startswith("menu_"):
-            await self._handle_menu_selection(query, data)
-        elif data.startswith("vip_"):
-            await self._handle_vip_selection(query, data)
-        elif data.startswith("pay_"):
-            await self._handle_payment(query, data)
-        elif data.startswith("admin_"):
-            await self._handle_admin_action(query, data)
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            data = query.data
+            
+            # Track callback analytics
+            await self.analytics.track_event(user_id, "callback_query", {"data": data})
+            
+            if data.startswith("lang_"):
+                await self._handle_language_selection(query, data)
+            elif data.startswith("menu_"):
+                await self._handle_menu_selection(query, data)
+            elif data.startswith("vip_"):
+                await self._handle_vip_selection(query, data)
+            elif data.startswith("pay_"):
+                await self._handle_payment(query, data)
+            elif data.startswith("admin_"):
+                await self._handle_admin_action(query, data)
+        except Exception as e:
+            logging.error(f"Error in handle_callback: {e}")
+            try:
+                await query.edit_message_text("❌ An error occurred. Please try again.")
+            except:
+                pass
     
     async def _handle_language_selection(self, query, data):
         """Handle language selection"""
@@ -1039,8 +1141,11 @@ class EnterpriseBot:
         """Handle main menu selections"""
         user_id = query.from_user.id
         user = await self.db.get_user(user_id)
-        lang_code = user['language_code']
+        if not user:
+            await query.edit_message_text("❌ User not found. Please use /start first.")
+            return
         
+        lang_code = user['language_code']
         menu_action = data.split("_")[1]
         
         if menu_action == "profile":
@@ -1059,6 +1164,8 @@ class EnterpriseBot:
             await self._show_settings(query, user, lang_code)
         elif menu_action == "support":
             await self._show_support(query, lang_code)
+        elif menu_action == "main":
+            await self._show_main_menu(query, lang_code)
     
     async def _show_profile(self, query, user, lang_code):
         """Show detailed user profile"""
@@ -1102,6 +1209,36 @@ class EnterpriseBot:
             parse_mode='Markdown'
         )
     
+    async def _show_profile_inline(self, message, user, lang_code):
+        """Show profile in inline message"""
+        level = min(user['experience_points'] // 100 + 1, 100)
+        stats = await self.analytics.get_user_analytics(user['user_id'])
+        
+        profile_text = f"""
+👤 **User Profile**
+
+🆔 **User ID:** {user['user_id']}
+📛 **Name:** {user['first_name']} {user['last_name'] or ''}
+🏆 **Level:** {level}
+⭐ **Experience:** {user['experience_points']} XP
+💎 **Loyalty Points:** {user['loyalty_points']}
+🎯 **VIP Status:** {user['vip_status'].title()}
+📥 **Downloads:** {user['download_count']}
+👥 **Referrals:** {user['total_referrals']}
+🔥 **Streak:** {user['streak_days']} days
+💰 **Total Spent:** ₹{user['total_spent']:.2f}
+📅 **Member Since:** {user['registration_date'][:10]}
+🕐 **Last Active:** {user['last_activity'][:16]}
+
+📊 **Activity Stats:**
+• Active Days: {stats['basic']['active_days']}
+• Total Events: {stats['basic']['total_events']}
+• Download Days: {stats['downloads']['download_days']}
+• Avg File Size: {stats['downloads']['avg_file_size']:.2f} MB
+"""
+        
+        await message.reply_text(profile_text, parse_mode='Markdown')
+    
     async def _show_vip_plans(self, query, lang_code):
         """Show VIP subscription plans"""
         plans_text = "💎 **VIP Subscription Plans**\n\n"
@@ -1128,13 +1265,341 @@ class EnterpriseBot:
             parse_mode='Markdown'
         )
     
+    async def _show_vip_plans_inline(self, message, lang_code):
+        """Show VIP plans in inline message"""
+        plans_text = "💎 **VIP Subscription Plans**\n\n"
+        
+        for plan_id, plan in self.config.VIP_PLANS.items():
+            plans_text += f"**{plan_id.title()} Plan - ₹{plan['price']}/month**\n"
+            plans_text += f"• {plan['downloads']} downloads" + (" (Unlimited)" if plan['downloads'] == -1 else "") + "\n"
+            plans_text += f"• Features: {', '.join(plan['features'])}\n\n"
+        
+        await message.reply_text(plans_text, parse_mode='Markdown')
+    
+    async def _show_referrals(self, query, user, lang_code):
+        """Show referral information"""
+        # Get referral earnings
+        async with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT SUM(earning_amount) as total_earnings FROM referral_earnings WHERE referrer_id = ?",
+                (user['user_id'],)
+            )
+            result = cursor.fetchone()
+            total_earnings = result['total_earnings'] if result and result['total_earnings'] else 0
+        
+        referral_text = f"""
+👥 **Referral Program**
+
+🔗 **Your Referral Code:** `{user['referral_code']}`
+📊 **Total Referrals:** {user['total_referrals']}
+💰 **Total Earnings:** ₹{total_earnings:.2f}
+
+🎯 **How it works:**
+• Share your referral code
+• Earn ₹10 for each signup
+• Get bonus from their purchases
+• 5-tier referral system
+
+📱 **Share Link:**
+`https://t.me/{self.config.BOT_USERNAME}?start={user['referral_code']}`
+
+💡 **Referral Bonuses:**
+• Tier 1: 10% of purchase
+• Tier 2: 8% of purchase  
+• Tier 3: 6% of purchase
+• Tier 4: 4% of purchase
+• Tier 5: 2% of purchase
+"""
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            referral_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def _show_referrals_inline(self, message, user, lang_code):
+        """Show referrals in inline message"""
+        async with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT SUM(earning_amount) as total_earnings FROM referral_earnings WHERE referrer_id = ?",
+                (user['user_id'],)
+            )
+            result = cursor.fetchone()
+            total_earnings = result['total_earnings'] if result and result['total_earnings'] else 0
+        
+        referral_text = f"""
+👥 **Referral Program**
+
+🔗 **Your Referral Code:** `{user['referral_code']}`
+📊 **Total Referrals:** {user['total_referrals']}
+💰 **Total Earnings:** ₹{total_earnings:.2f}
+
+🎯 **How it works:**
+• Share your referral code
+• Earn ₹10 for each signup
+• Get bonus from their purchases
+• 5-tier referral system
+
+📱 **Share Link:**
+`https://t.me/{self.config.BOT_USERNAME}?start={user['referral_code']}`
+"""
+        
+        await message.reply_text(referral_text, parse_mode='Markdown')
+    
+    async def _show_achievements(self, query, user, lang_code):
+        """Show user achievements"""
+        # Get user achievements
+        async with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT achievement_type, achievement_date FROM user_achievements WHERE user_id = ? ORDER BY achievement_date DESC",
+                (user['user_id'],)
+            )
+            user_achievements = cursor.fetchall()
+        
+        achievements_text = "🏆 **Your Achievements**\n\n"
+        
+        if user_achievements:
+            for achievement in user_achievements:
+                achievement_info = self.achievements.achievements.get(achievement['achievement_type'], {})
+                achievements_text += f"{achievement_info.get('icon', '🏆')} **{achievement_info.get('name', 'Unknown')}**\n"
+                achievements_text += f"   {achievement_info.get('description', 'No description')}\n"
+                achievements_text += f"   Earned: {achievement['achievement_date'][:10]}\n\n"
+        else:
+            achievements_text += "No achievements yet. Start using the bot to unlock achievements!"
+        
+        achievements_text += "\n🎯 **Available Achievements:**\n"
+        for achievement_type, achievement_info in self.achievements.achievements.items():
+            has_achievement = any(ua['achievement_type'] == achievement_type for ua in user_achievements)
+            status = "✅" if has_achievement else "⏳"
+            achievements_text += f"{status} {achievement_info['icon']} {achievement_info['name']}\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            achievements_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def _show_achievements_inline(self, message, user, lang_code):
+        """Show achievements in inline message"""
+        async with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT achievement_type, achievement_date FROM user_achievements WHERE user_id = ? ORDER BY achievement_date DESC",
+                (user['user_id'],)
+            )
+            user_achievements = cursor.fetchall()
+        
+        achievements_text = "🏆 **Your Achievements**\n\n"
+        
+        if user_achievements:
+            for achievement in user_achievements:
+                achievement_info = self.achievements.achievements.get(achievement['achievement_type'], {})
+                achievements_text += f"{achievement_info.get('icon', '🏆')} **{achievement_info.get('name', 'Unknown')}**\n"
+                achievements_text += f"   {achievement_info.get('description', 'No description')}\n"
+                achievements_text += f"   Earned: {achievement['achievement_date'][:10]}\n\n"
+        else:
+            achievements_text += "No achievements yet. Start using the bot to unlock achievements!"
+        
+        await message.reply_text(achievements_text, parse_mode='Markdown')
+    
+    async def _show_downloads(self, query, user, lang_code):
+        """Show user downloads"""
+        # Get recent downloads
+        async with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT file_name, download_date, file_size FROM downloads WHERE user_id = ? ORDER BY download_date DESC LIMIT 10",
+                (user['user_id'],)
+            )
+            recent_downloads = cursor.fetchall()
+        
+        downloads_text = f"📥 **Your Downloads**\n\n"
+        downloads_text += f"📊 **Total Downloads:** {user['download_count']}\n"
+        downloads_text += f"📅 **Today's Downloads:** {user['daily_downloads']}\n\n"
+        
+        if recent_downloads:
+            downloads_text += "🕐 **Recent Downloads:**\n"
+            for download in recent_downloads:
+                file_size_mb = (download['file_size'] or 0) / (1024 * 1024)
+                downloads_text += f"• {download['file_name']} ({file_size_mb:.1f} MB)\n"
+                downloads_text += f"  {download['download_date'][:16]}\n\n"
+        else:
+            downloads_text += "No downloads yet. Start downloading files!"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            downloads_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def _show_user_analytics(self, query, user, lang_code):
+        """Show user analytics"""
+        stats = await self.analytics.get_user_analytics(user['user_id'])
+        
+        analytics_text = f"""
+📊 **Your Analytics**
+
+📈 **Activity Stats:**
+• Active Days: {stats['basic']['active_days']}
+• Total Events: {stats['basic']['total_events']}
+• Last Activity: {stats['basic']['last_activity'] or 'Never'}
+
+📥 **Download Stats:**
+• Total Downloads: {stats['downloads']['total_downloads']}
+• Download Days: {stats['downloads']['download_days']}
+• Avg File Size: {stats['downloads']['avg_file_size']:.2f} MB
+
+💰 **Revenue Stats:**
+• Total Spent: ₹{stats['revenue']['total_spent']:.2f}
+• Total Transactions: {stats['revenue']['total_transactions']}
+• Last Payment: {stats['revenue']['last_payment'] or 'Never'}
+
+🎯 **Performance:**
+• User Level: {min(user['experience_points'] // 100 + 1, 100)}
+• Experience Points: {user['experience_points']} XP
+• Loyalty Points: {user['loyalty_points']}
+• Streak Days: {user['streak_days']}
+"""
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            analytics_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def _show_user_analytics_inline(self, message, user, lang_code):
+        """Show analytics in inline message"""
+        stats = await self.analytics.get_user_analytics(user['user_id'])
+        
+        analytics_text = f"""
+📊 **Your Analytics**
+
+📈 **Activity Stats:**
+• Active Days: {stats['basic']['active_days']}
+• Total Events: {stats['basic']['total_events']}
+• Last Activity: {stats['basic']['last_activity'] or 'Never'}
+
+📥 **Download Stats:**
+• Total Downloads: {stats['downloads']['total_downloads']}
+• Download Days: {stats['downloads']['download_days']}
+• Avg File Size: {stats['downloads']['avg_file_size']:.2f} MB
+
+💰 **Revenue Stats:**
+• Total Spent: ₹{stats['revenue']['total_spent']:.2f}
+• Total Transactions: {stats['revenue']['total_transactions']}
+• Last Payment: {stats['revenue']['last_payment'] or 'Never'}
+"""
+        
+        await message.reply_text(analytics_text, parse_mode='Markdown')
+    
+    async def _show_settings(self, query, user, lang_code):
+        """Show user settings"""
+        settings_text = f"""
+⚙️ **Settings**
+
+🌍 **Language:** {user['language_code'].upper()}
+🔔 **Notifications:** Enabled
+🔐 **2FA:** {'Enabled' if user['two_factor_enabled'] else 'Disabled'}
+🎯 **VIP Status:** {user['vip_status'].title()}
+
+📱 **Account Info:**
+• User ID: {user['user_id']}
+• Username: @{user['username'] or 'Not set'}
+• Member Since: {user['registration_date'][:10]}
+"""
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🌍 Change Language", callback_data="settings_language"),
+                InlineKeyboardButton("🔐 Toggle 2FA", callback_data="settings_2fa")
+            ],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            settings_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    async def _show_support(self, query, lang_code):
+        """Show support information"""
+        support_text = f"""
+🆘 **Support & Help**
+
+📞 **Contact Options:**
+• Telegram: @support
+• Email: support@filebot.com
+• Website: https://filebot.com
+
+❓ **FAQ:**
+• How to upgrade to VIP?
+• How referrals work?
+• Download limits explained
+• Payment methods
+
+🕐 **Support Hours:**
+Monday - Friday: 9 AM - 6 PM IST
+Saturday: 10 AM - 4 PM IST
+Sunday: Closed
+
+📋 **Quick Commands:**
+/help - Show help
+/profile - Your profile
+/vip - VIP plans
+/referral - Referral info
+"""
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("💬 Contact Support", url="https://t.me/support"),
+                InlineKeyboardButton("📚 FAQ", callback_data="support_faq")
+            ],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="menu_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            support_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
     async def _handle_vip_selection(self, query, data):
         """Handle VIP plan selection"""
         user_id = query.from_user.id
         action = data.split("_")[1]
+        
+        if len(data.split("_")) < 3:
+            await query.edit_message_text("❌ Invalid selection. Please try again.")
+            return
+        
         plan_id = data.split("_")[2]
         
         if action == "buy":
+            if plan_id not in self.config.VIP_PLANS:
+                await query.edit_message_text("❌ Invalid plan selected.")
+                return
+            
             plan = self.config.VIP_PLANS[plan_id]
             payment_info = await self.payments.create_payment_link(
                 user_id, plan_id, plan['price']
@@ -1175,6 +1640,11 @@ After payment, click "Verify Payment" button.
     async def _handle_payment(self, query, data):
         """Handle payment verification"""
         action = data.split("_")[1]
+        
+        if len(data.split("_")) < 3:
+            await query.edit_message_text("❌ Invalid payment data.")
+            return
+        
         transaction_id = data.split("_")[2]
         
         if action == "verify":
@@ -1185,7 +1655,7 @@ After payment, click "Verify Payment" button.
                 await self.payments.process_successful_payment(transaction_id)
                 
                 user = await self.db.get_user(query.from_user.id)
-                lang_code = user['language_code']
+                lang_code = user['language_code'] if user else 'en'
                 
                 success_text = self.lang.get_text(lang_code, "payment_success")
                 
@@ -1213,16 +1683,75 @@ After payment, click "Verify Payment" button.
                     ])
                 )
     
-    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Admin dashboard with business metrics"""
-        if update.effective_user.id != self.config.ADMIN_ID:
-            await update.message.reply_text("❌ Access denied. Admin only.")
+    async def _handle_admin_action(self, query, data):
+        """Handle admin actions"""
+        if query.from_user.id != self.config.ADMIN_ID:
+            await query.edit_message_text("❌ Access denied. Admin only.")
             return
         
-        # Get business metrics
-        metrics = await self.analytics.get_business_metrics()
+        action = data.split("_")[1]
         
-        admin_text = f"""
+        if action == "analytics":
+            metrics = await self.analytics.get_business_metrics()
+            
+            detailed_text = f"""
+📊 **Detailed Analytics**
+
+👥 **User Metrics:**
+• Total Users: {metrics['users']['total_users']}
+• VIP Users: {metrics['users']['vip_users']}
+• Daily Active: {metrics['users']['daily_active_users']}
+• New Today: {metrics['users']['new_users_today']}
+• Conversion Rate: {(metrics['users']['vip_users'] / max(metrics['users']['total_users'], 1) * 100):.2f}%
+
+💰 **Revenue Metrics:**
+• Total Revenue: ₹{metrics['revenue']['total_revenue']:.2f}
+• Daily Revenue: ₹{metrics['revenue']['daily_revenue']:.2f}
+• Total Transactions: {metrics['revenue']['total_transactions']}
+• Avg Transaction: ₹{metrics['revenue']['avg_transaction_value']:.2f}
+
+📁 **Content Metrics:**
+• Total Content: {metrics['content']['total_content']}
+• Total Downloads: {metrics['content']['total_downloads']}
+• Avg Rating: {metrics['content']['avg_rating']:.2f}/5.0
+
+🕐 **Last Updated:** {metrics['timestamp'][:16]}
+"""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_main")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                detailed_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        
+        elif action == "main":
+            # Show main admin dashboard
+            await self.admin_command(query, None)
+    
+    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Admin dashboard with business metrics"""
+        try:
+            # Handle both message and callback query
+            if hasattr(update, 'callback_query') and update.callback_query:
+                user_id = update.callback_query.from_user.id
+                send_method = update.callback_query.edit_message_text
+            else:
+                user_id = update.effective_user.id
+                send_method = update.message.reply_text
+            
+            if user_id != self.config.ADMIN_ID:
+                await send_method("❌ Access denied. Admin only.")
+                return
+            
+            # Get business metrics
+            metrics = await self.analytics.get_business_metrics()
+            
+            admin_text = f"""
 🔧 **Admin Dashboard**
 
 👥 **User Metrics:**
@@ -1244,87 +1773,139 @@ After payment, click "Verify Payment" button.
 
 🕐 **Last Updated:** {metrics['timestamp'][:16]}
 """
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("📊 Detailed Analytics", callback_data="admin_analytics"),
-                InlineKeyboardButton("👥 User Management", callback_data="admin_users")
-            ],
-            [
-                InlineKeyboardButton("📁 Content Management", callback_data="admin_content"),
-                InlineKeyboardButton("💰 Revenue Reports", callback_data="admin_revenue")
-            ],
-            [
-                InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast"),
-                InlineKeyboardButton("⚙️ Bot Settings", callback_data="admin_settings")
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("📊 Detailed Analytics", callback_data="admin_analytics"),
+                    InlineKeyboardButton("👥 User Management", callback_data="admin_users")
+                ],
+                [
+                    InlineKeyboardButton("📁 Content Management", callback_data="admin_content"),
+                    InlineKeyboardButton("💰 Revenue Reports", callback_data="admin_revenue")
+                ],
+                [
+                    InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast"),
+                    InlineKeyboardButton("⚙️ Bot Settings", callback_data="admin_settings")
+                ]
             ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            admin_text,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await send_method(
+                admin_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Error in admin_command: {e}")
+            if hasattr(update, 'message') and update.message:
+                await update.message.reply_text("❌ An error occurred. Please try again.")
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages with smart responses"""
-        user_id = update.effective_user.id
-        message_text = update.message.text.lower()
-        
-        # Track message analytics
-        await self.analytics.track_event(user_id, "message_sent", {"text_length": len(message_text)})
-        
-        # Check if user is blocked or rate limited
-        if self.security.is_user_blocked(user_id):
-            return
-        
-        if not self.security.check_rate_limit(user_id, "message"):
-            await update.message.reply_text("⚠️ Too many messages. Please slow down.")
-            return
-        
-        # Smart response system
-        if any(word in message_text for word in ['help', 'support', 'problem']):
-            await self._show_help_response(update)
-        elif any(word in message_text for word in ['vip', 'premium', 'subscription']):
-            await self._show_vip_info(update)
-        elif any(word in message_text for word in ['referral', 'invite', 'bonus']):
-            await self._show_referral_info(update)
-        else:
-            # Get content recommendations
-            recommendations = await self.recommendations.get_recommendations(user_id, 5)
-            if recommendations:
-                await self._show_recommendations(update, recommendations)
+        try:
+            user_id = update.effective_user.id
+            message_text = update.message.text.lower()
+            
+            # Track message analytics
+            await self.analytics.track_event(user_id, "message_sent", {"text_length": len(message_text)})
+            
+            # Check if user is blocked or rate limited
+            if self.security.is_user_blocked(user_id):
+                return
+            
+            if not self.security.check_rate_limit(user_id, "message"):
+                await update.message.reply_text("⚠️ Too many messages. Please slow down.")
+                return
+            
+            # Smart response system
+            if any(word in message_text for word in ['help', 'support', 'problem']):
+                await self._show_help_response(update)
+            elif any(word in message_text for word in ['vip', 'premium', 'subscription']):
+                await self._show_vip_info(update)
+            elif any(word in message_text for word in ['referral', 'invite', 'bonus']):
+                await self._show_referral_info(update)
             else:
-                await update.message.reply_text(
-                    "🤖 I'm here to help! Use /help to see available commands or browse our VIP plans for premium content."
-                )
+                # Get content recommendations
+                recommendations = await self.recommendations.get_recommendations(user_id, 5)
+                if recommendations:
+                    await self._show_recommendations(update, recommendations)
+                else:
+                    await update.message.reply_text(
+                        "🤖 I'm here to help! Use /help to see available commands or browse our VIP plans for premium content."
+                    )
+        except Exception as e:
+            logging.error(f"Error in handle_message: {e}")
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    async def _show_help_response(self, update):
+        """Show help response"""
+        user = await self.db.get_user(update.effective_user.id)
+        lang_code = user['language_code'] if user else 'en'
+        help_text = self.lang.get_text(lang_code, "help_text")
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+    
+    async def _show_vip_info(self, update):
+        """Show VIP information"""
+        user = await self.db.get_user(update.effective_user.id)
+        lang_code = user['language_code'] if user else 'en'
+        await self._show_vip_plans_inline(update.message, lang_code)
+    
+    async def _show_referral_info(self, update):
+        """Show referral information"""
+        user = await self.db.get_user(update.effective_user.id)
+        if user:
+            await self._show_referrals_inline(update.message, user, user['language_code'])
+        else:
+            await update.message.reply_text("❌ User not found. Please use /start first.")
+    
+    async def _show_recommendations(self, update, recommendations):
+        """Show content recommendations"""
+        if not recommendations:
+            await update.message.reply_text("📁 No recommendations available at the moment.")
+            return
+        
+        rec_text = "🎯 **Recommended for you:**\n\n"
+        for i, rec in enumerate(recommendations[:3], 1):
+            rec_text += f"{i}. **{rec['title']}**\n"
+            rec_text += f"   Category: {rec['category']}\n"
+            rec_text += f"   Downloads: {rec['download_count']}\n"
+            rec_text += f"   Rating: {rec['avg_rating']:.1f}/5.0\n\n"
+        
+        await update.message.reply_text(rec_text, parse_mode='Markdown')
     
     async def handle_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle media uploads for content management"""
-        user_id = update.effective_user.id
-        
-        # Check if user is admin or VIP
-        user = await self.db.get_user(user_id)
-        if user_id != self.config.ADMIN_ID and user['vip_status'] == 'free':
-            await update.message.reply_text("🔒 Media upload requires VIP membership.")
-            return
-        
-        # Process media upload
-        media = update.message.photo or update.message.video or update.message.document
-        if media:
-            file_id = media[-1].file_id if isinstance(media, list) else media.file_id
-            file_size = media[-1].file_size if isinstance(media, list) else media.file_size
+        try:
+            user_id = update.effective_user.id
             
-            # Store content in database
-            async with self.db.get_connection() as conn:
-                conn.execute(
-                    "INSERT INTO content (file_id, title, file_type, file_size, uploader_id) VALUES (?, ?, ?, ?, ?)",
-                    (file_id, f"Upload_{int(time.time())}", "media", file_size, user_id)
-                )
-                conn.commit()
+            # Check if user is admin or VIP
+            user = await self.db.get_user(user_id)
+            if not user:
+                await update.message.reply_text("❌ User not found. Please use /start first.")
+                return
             
-            await update.message.reply_text("✅ Media uploaded successfully!")
+            if user_id != self.config.ADMIN_ID and user['vip_status'] == 'free':
+                await update.message.reply_text("🔒 Media upload requires VIP membership.")
+                return
+            
+            # Process media upload
+            media = update.message.photo or update.message.video or update.message.document
+            if media:
+                file_id = media[-1].file_id if isinstance(media, list) else media.file_id
+                file_size = media[-1].file_size if isinstance(media, list) else media.file_size
+                
+                # Store content in database
+                async with self.db.get_connection() as conn:
+                    conn.execute(
+                        "INSERT INTO content (file_id, title, file_type, file_size, uploader_id) VALUES (?, ?, ?, ?, ?)",
+                        (file_id, f"Upload_{int(time.time())}", "media", file_size or 0, user_id)
+                    )
+                    conn.commit()
+                
+                await update.message.reply_text("✅ Media uploaded successfully!")
+        except Exception as e:
+            logging.error(f"Error in handle_media: {e}")
+            await update.message.reply_text("❌ An error occurred while uploading media.")
     
     def run(self):
         """Start the bot with all enterprise features"""
@@ -1348,71 +1929,121 @@ After payment, click "Verify Payment" button.
                 time.sleep(60)
         
         # Schedule daily tasks
-        schedule.every().day.at("00:00").do(self._daily_maintenance)
-        schedule.every().hour.do(self._hourly_analytics)
-        schedule.every(10).minutes.do(self._check_vip_expiry)
+        schedule.every().day.at("00:00").do(self._daily_maintenance_sync)
+        schedule.every().hour.do(self._hourly_analytics_sync)
+        schedule.every(10).minutes.do(self._check_vip_expiry_sync)
         
         # Start scheduler in background thread
         scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
         scheduler_thread.start()
     
+    def _daily_maintenance_sync(self):
+        """Sync wrapper for daily maintenance"""
+        asyncio.create_task(self._daily_maintenance())
+    
+    def _hourly_analytics_sync(self):
+        """Sync wrapper for hourly analytics"""
+        asyncio.create_task(self._hourly_analytics())
+    
+    def _check_vip_expiry_sync(self):
+        """Sync wrapper for VIP expiry check"""
+        asyncio.create_task(self._check_vip_expiry())
+    
     async def _daily_maintenance(self):
         """Daily maintenance tasks"""
-        print("🔧 Running daily maintenance...")
-        
-        # Reset daily download counts
-        async with self.db.get_connection() as conn:
-            conn.execute("UPDATE users SET daily_downloads = 0")
-            conn.commit()
-        
-        # Update user streaks
-        await self._update_user_streaks()
-        
-        # Clean old analytics data (keep last 90 days)
-        cutoff_date = datetime.now() - timedelta(days=90)
-        async with self.db.get_connection() as conn:
-            conn.execute("DELETE FROM user_analytics WHERE timestamp < ?", (cutoff_date,))
-            conn.commit()
-        
-        print("✅ Daily maintenance completed")
+        try:
+            print("🔧 Running daily maintenance...")
+            
+            # Reset daily download counts
+            async with self.db.get_connection() as conn:
+                conn.execute("UPDATE users SET daily_downloads = 0")
+                conn.commit()
+            
+            # Update user streaks
+            await self._update_user_streaks()
+            
+            # Clean old analytics data (keep last 90 days)
+            cutoff_date = datetime.now() - timedelta(days=90)
+            async with self.db.get_connection() as conn:
+                conn.execute("DELETE FROM user_analytics WHERE timestamp < ?", (cutoff_date.isoformat(),))
+                conn.commit()
+            
+            print("✅ Daily maintenance completed")
+        except Exception as e:
+            logging.error(f"Error in daily maintenance: {e}")
+    
+    async def _update_user_streaks(self):
+        """Update user activity streaks"""
+        try:
+            today = datetime.now().date()
+            async with self.db.get_connection() as conn:
+                # Get all users
+                cursor = conn.execute("SELECT user_id, last_streak_date, streak_days FROM users")
+                users = cursor.fetchall()
+                
+                for user in users:
+                    last_streak = user['last_streak_date']
+                    if last_streak:
+                        last_date = datetime.strptime(last_streak, '%Y-%m-%d').date()
+                        if (today - last_date).days == 1:
+                            # Continue streak
+                            conn.execute(
+                                "UPDATE users SET streak_days = streak_days + 1, last_streak_date = ? WHERE user_id = ?",
+                                (today.isoformat(), user['user_id'])
+                            )
+                        elif (today - last_date).days > 1:
+                            # Reset streak
+                            conn.execute(
+                                "UPDATE users SET streak_days = 0, last_streak_date = ? WHERE user_id = ?",
+                                (today.isoformat(), user['user_id'])
+                            )
+                
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error updating user streaks: {e}")
     
     async def _hourly_analytics(self):
         """Hourly analytics processing"""
-        # Update content recommendations
-        print("📊 Processing hourly analytics...")
-        
-        # Update trending content
-        async with self.db.get_connection() as conn:
-            conn.execute('''
-                UPDATE content SET 
-                trending_score = download_count * 0.7 + rating * 0.3
-                WHERE status = 'active'
-            ''')
-            conn.commit()
+        try:
+            print("📊 Processing hourly analytics...")
+            
+            # Update trending content
+            async with self.db.get_connection() as conn:
+                conn.execute('''
+                    UPDATE content SET 
+                    trending_score = download_count * 0.7 + rating * 0.3
+                    WHERE status = 'active'
+                ''')
+                conn.commit()
+        except Exception as e:
+            logging.error(f"Error in hourly analytics: {e}")
     
     async def _check_vip_expiry(self):
         """Check and handle VIP subscription expiry"""
-        async with self.db.get_connection() as conn:
-            # Find expired VIP users
-            cursor = conn.execute('''
-                SELECT user_id FROM users 
-                WHERE vip_status != 'free' 
-                AND vip_expiry < CURRENT_TIMESTAMP
-            ''')
-            
-            expired_users = [row['user_id'] for row in cursor.fetchall()]
-            
-            # Reset expired users to free
-            if expired_users:
-                placeholders = ','.join(['?' for _ in expired_users])
-                conn.execute(f'''
-                    UPDATE users 
-                    SET vip_status = 'free', vip_expiry = NULL 
-                    WHERE user_id IN ({placeholders})
-                ''', expired_users)
-                conn.commit()
+        try:
+            async with self.db.get_connection() as conn:
+                # Find expired VIP users
+                cursor = conn.execute('''
+                    SELECT user_id FROM users 
+                    WHERE vip_status != 'free' 
+                    AND vip_expiry < CURRENT_TIMESTAMP
+                ''')
                 
-                print(f"⏰ Reset {len(expired_users)} expired VIP subscriptions")
+                expired_users = [row['user_id'] for row in cursor.fetchall()]
+                
+                # Reset expired users to free
+                if expired_users:
+                    placeholders = ','.join(['?' for _ in expired_users])
+                    conn.execute(f'''
+                        UPDATE users 
+                        SET vip_status = 'free', vip_expiry = NULL 
+                        WHERE user_id IN ({placeholders})
+                    ''', expired_users)
+                    conn.commit()
+                    
+                    print(f"⏰ Reset {len(expired_users)} expired VIP subscriptions")
+        except Exception as e:
+            logging.error(f"Error checking VIP expiry: {e}")
 
 # Initialize and run the bot
 if __name__ == "__main__":
