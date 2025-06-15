@@ -1446,9 +1446,9 @@ async def handle_task_setup_qr(update, context, state):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        if update.message and update.message.photo:
-        state["qr_code"] = update.message.photo[-1].file_id
-        state["step"] = f"{state['task_type']}_description"
+        elif update.message.photo:
+            state["qr_code"] = update.message.photo[-1].file_id
+            state["step"] = f"{state['task_type']}_description"
 
         await update.message.reply_text(
             "✅ QR code saved!\n\n"
