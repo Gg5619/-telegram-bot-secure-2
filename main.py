@@ -51,7 +51,7 @@ app.add_middleware(
 )
 
 # OAuth2 configuration
-2oauth_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # Token verification
 def verify_token(token: str ->) Optional[str]:
