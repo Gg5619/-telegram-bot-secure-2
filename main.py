@@ -1446,7 +1446,7 @@ async def handle_task_setup_qr(update, context, state):
             parse_mode=ParseMode.MARKDOWN
         )
 
-        elif update.message.photo:
+        elif update.message and update.message.photo:
         state["qr_code"] = update.message.photo[-1].file_id
         state["step"] = f"{state['task_type']}_description"
 
