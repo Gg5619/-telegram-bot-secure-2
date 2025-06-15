@@ -92,8 +92,8 @@ def log_security_event(event_type, user_id, details):
     }
     logger.warning(f"SECURITY_EVENT: {json.dumps(log_entry)}")
     
-    try:with        
-    get_db_connection() as conn:
+    try:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO security_logs (user_id, event_type details,)
