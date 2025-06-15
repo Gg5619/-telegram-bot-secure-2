@@ -165,11 +165,11 @@ _id feedback:
     rating: int
 
 # Bot configurationBOT
- =_TOKEN.getenv os('BOT_TOKEN')
-ADMIN =_ID os.getenv('ADMIN_IDCHANNEL_ID')
- =.getenv(' osUPICHANNEL_ID')
-_ID = os.getenv('UPI_ID')
-BOT_USERNAME = os.getenv('BOT_USERNAME')
+ =_TOKEN.getenv os('7721980677:AAHalo2tzPZfBY4HJgMpYVflStxrbzfiMFg')
+ADMIN =_ID os.getenv('8073033955')
+ =.getenv('@eighteenplusdrops')
+_ID = os.getenv('arvindmanro4@okhdfcbank')
+BOT_USERNAME = os.getenv('@Fileprovider_robot')
 
 # Database indexes
 db.users.create_index("user_id")
