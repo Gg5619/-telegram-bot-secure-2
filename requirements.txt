@@ -1,15 +1,2 @@
 python-telegram-bot==20.8
-sqlite3
-asyncio
-logging
-json
-hashlib
-secrets
-time
-datetime
-typing
-dataclasses
-collections
-threading
-contextlib
-os
+
