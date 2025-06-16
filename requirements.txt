@@ -1,2 +1,2 @@
-python-telegram-bot[job-queue]==21.0.1
+python-telegram-bot==20.8
 schedule==1.2.0
