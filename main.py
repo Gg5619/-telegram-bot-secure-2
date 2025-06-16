@@ -2059,7 +2059,8 @@ if __name__ == "__main__":
     
     # Create and run the bot
     bot = EnterpriseBot()
-    
+    import gc
+           gc.collect()
     try:
         bot.run()
     except KeyboardInterrupt:
