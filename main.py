@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enterprise Telegram Bot - Production Ready
-Optimized for Render deployment with all enterprise features
+Optimized for Render deployment with python-telegram-bot v20.8
 """
 
 import asyncio
@@ -16,8 +16,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from collections import defaultdict
-import threading
-from contextlib import asynccontextmanager
 
 # Telegram Bot API
 from telegram import (
@@ -249,8 +247,19 @@ class DatabaseManager:
             if not updates:
                 return False
             
-            set_clause = ', '.join([f"{k} = ?" for k in updates.keys()])
-            values = list(updates.values()) + [user_id]
+            # Handle special SQL expressions
+            set_clauses = []
+            values = []
+            
+            for key, value in updates.items():
+                if isinstance(value, str) and 'total_referrals + 1' in value:
+                    set_clauses.append(f"{key} = total_referrals + 1")
+                else:
+                    set_clauses.append(f"{key} = ?")
+                    values.append(value)
+            
+            set_clause = ', '.join(set_clauses)
+            values.append(user_id)
             
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute(f"UPDATE users SET {set_clause} WHERE user_id = ?", values)
@@ -435,8 +444,12 @@ class TelegramBot:
         self.user_last_action = defaultdict(float)
         self.rate_limit_window = 1.0  # 1 second between actions
         
-        # Initialize application
-        self.application = Application.builder().token(self.config.BOT_TOKEN).build()
+        # Initialize application with proper configuration
+        self.application = (
+            Application.builder()
+            .token(self.config.BOT_TOKEN)
+            .build()
+        )
         self._setup_handlers()
     
     def _setup_handlers(self):
@@ -1182,14 +1195,14 @@ After payment, click "Verify Payment".
             logger.error(f"Error in handle_message: {e}")
     
     def run(self):
-        """Start the bot"""
+        """Run the bot using the simple run_polling method"""
         try:
             logger.info("🚀 Starting Telegram Bot...")
             logger.info(f"📊 Database: {self.config.DB_PATH}")
             logger.info(f"🤖 Bot: {self.config.BOT_USERNAME}")
             logger.info(f"👑 Admin: {self.config.ADMIN_ID}")
             
-            # Run the bot
+            # Use the simple run_polling method which handles everything internally
             self.application.run_polling(
                 drop_pending_updates=True,
                 allowed_updates=Update.ALL_TYPES
@@ -1209,3 +1222,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"❌ Bot crashed: {e}")
         raise
+
